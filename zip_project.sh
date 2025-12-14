@@ -14,29 +14,9 @@ echo ""
 
 if command -v zip &> /dev/null; then
     echo "Using zip with maximum compression (-9)..."
+    echo "Including ALL files and folders (including cache, build, etc.)..."
     
-    zip -9 -r "$OUTPUT_FILE" \
-        app/ \
-        gradle/ \
-        .github/ \
-        .gitignore \
-        build.gradle \
-        build_debug.sh \
-        build_release.sh \
-        gradle.properties \
-        gradlew \
-        LICENSE \
-        README.md \
-        release-keystore.jks \
-        replit.md \
-        settings.gradle \
-        validate_project.sh \
-        zip_project.sh \
-        -x "*.git/*" \
-        -x "*build/*" \
-        -x "*.idea/*" \
-        -x "*.gradle/*" \
-        -x "*__pycache__/*"
+    zip -9 -r "$OUTPUT_FILE" .
     
     if [ $? -eq 0 ]; then
         FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
