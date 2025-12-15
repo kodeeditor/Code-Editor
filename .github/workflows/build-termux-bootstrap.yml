@@ -1,0 +1,259 @@
+name: Build Custom Termux Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Architectures to build (comma-separated: aarch64,arm,i686,x86_64)'
+        required: false
+        default: 'aarch64,arm'
+      termux_packages_ref:
+        description: 'termux-packages branch/tag/commit'
+        required: false
+        default: 'master'
+  push:
+    paths:
+      - '.github/workflows/build-termux-bootstrap.yml'
+    branches:
+      - main
+      - master
+
+env:
+  CUSTOM_PACKAGE_NAME: com.codeeditor.android
+  TERMUX_PACKAGES_REPO: https://github.com/termux/termux-packages.git
+
+jobs:
+  build-bootstrap:
+    name: Build Termux Bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Free disk space
+      run: |
+        echo "Freeing up disk space..."
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune -a -f
+        df -h
+        
+    - name: Clone termux-packages
+      run: |
+        git clone --depth 1 --branch ${{ github.event.inputs.termux_packages_ref || 'master' }} \
+          $TERMUX_PACKAGES_REPO termux-packages
+        cd termux-packages
+        echo "Cloned termux-packages at commit: $(git rev-parse HEAD)"
+        
+    - name: Patch package name in properties.sh
+      run: |
+        cd termux-packages
+        
+        # Backup original
+        cp scripts/properties.sh scripts/properties.sh.original
+        
+        # Replace the package name
+        sed -i "s|TERMUX_APP_PACKAGE=\"com.termux\"|TERMUX_APP_PACKAGE=\"$CUSTOM_PACKAGE_NAME\"|g" scripts/properties.sh
+        
+        # Also update the prefix path that uses the package name
+        sed -i "s|/data/data/com.termux/files|/data/data/$CUSTOM_PACKAGE_NAME/files|g" scripts/properties.sh
+        
+        # Show the changes
+        echo "=== Changes made to properties.sh ==="
+        diff scripts/properties.sh.original scripts/properties.sh || true
+        
+        echo "=== Relevant lines from patched properties.sh ==="
+        grep -E "(TERMUX_APP_PACKAGE|TERMUX_PREFIX)" scripts/properties.sh || true
+        
+    - name: Patch build-bootstraps.sh for custom package
+      run: |
+        cd termux-packages
+        
+        # Additional patching if needed for hardcoded paths in build scripts
+        find scripts -name "*.sh" -type f -exec grep -l "com.termux" {} \; | while read file; do
+          echo "Patching $file..."
+          sed -i "s|com\.termux|$CUSTOM_PACKAGE_NAME|g" "$file"
+        done
+        
+    - name: Set up Docker
+      run: |
+        docker --version
+        
+    - name: Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: ~/.docker
+        key: ${{ runner.os }}-docker-${{ hashFiles('termux-packages/scripts/Dockerfile') }}
+        restore-keys: |
+          ${{ runner.os }}-docker-
+          
+    - name: Determine architectures to build
+      id: arch
+      run: |
+        ARCHS="${{ github.event.inputs.architectures || 'aarch64,arm' }}"
+        echo "architectures=$ARCHS" >> $GITHUB_OUTPUT
+        echo "Building for architectures: $ARCHS"
+        
+    - name: Build bootstrap archives
+      run: |
+        cd termux-packages
+        
+        # Make scripts executable
+        chmod +x scripts/*.sh
+        
+        # Build bootstraps using Docker
+        # The --force-build flag ensures fresh compilation
+        ARCHS="${{ steps.arch.outputs.architectures }}"
+        
+        echo "Starting bootstrap build for: $ARCHS"
+        echo "This may take several hours..."
+        
+        # Run the build in Docker
+        ./scripts/run-docker.sh ./scripts/build-bootstraps.sh \
+          --architectures "$ARCHS" \
+          2>&1 | tee build.log
+          
+        echo "Build completed!"
+        
+    - name: Verify bootstrap files
+      run: |
+        cd termux-packages
+        echo "=== Generated bootstrap files ==="
+        ls -la bootstrap-*.zip 2>/dev/null || echo "No bootstrap files found in root"
+        ls -la output/bootstrap-*.zip 2>/dev/null || echo "No bootstrap files found in output/"
+        find . -name "bootstrap-*.zip" -type f
+        
+    - name: Create version info
+      run: |
+        cd termux-packages
+        VERSION_DATE=$(date +%Y.%m.%d)
+        COMMIT_SHORT=$(git rev-parse --short HEAD)
+        echo "VERSION=${VERSION_DATE}-${COMMIT_SHORT}" >> $GITHUB_ENV
+        echo "Bootstrap version: ${VERSION_DATE}-${COMMIT_SHORT}"
+        
+        # Create version file
+        cat > bootstrap-version.txt << EOF
+        Version: ${VERSION_DATE}-${COMMIT_SHORT}
+        Package: $CUSTOM_PACKAGE_NAME
+        Architectures: ${{ steps.arch.outputs.architectures }}
+        Built: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        Termux-packages commit: $(git rev-parse HEAD)
+        EOF
+        cat bootstrap-version.txt
+        
+    - name: Collect bootstrap artifacts
+      run: |
+        mkdir -p bootstrap-artifacts
+        
+        cd termux-packages
+        
+        # Copy bootstrap files to artifacts directory
+        for arch in aarch64 arm i686 x86_64; do
+          if [ -f "bootstrap-${arch}.zip" ]; then
+            cp "bootstrap-${arch}.zip" "../bootstrap-artifacts/"
+            echo "Copied bootstrap-${arch}.zip"
+          fi
+        done
+        
+        # Also check output directory
+        if [ -d "output" ]; then
+          cp output/bootstrap-*.zip ../bootstrap-artifacts/ 2>/dev/null || true
+        fi
+        
+        cp bootstrap-version.txt ../bootstrap-artifacts/
+        
+        cd ../bootstrap-artifacts
+        echo "=== Final artifacts ==="
+        ls -la
+        
+        # Generate checksums
+        sha256sum *.zip > checksums.sha256 2>/dev/null || echo "No zip files to checksum"
+        cat checksums.sha256 2>/dev/null || true
+        
+    - name: Upload bootstrap artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: termux-bootstrap-${{ env.CUSTOM_PACKAGE_NAME }}-${{ env.VERSION }}
+        path: bootstrap-artifacts/
+        retention-days: 90
+        
+    - name: Upload individual architecture artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: bootstrap-aarch64
+        path: bootstrap-artifacts/bootstrap-aarch64.zip
+        retention-days: 90
+        if-no-files-found: ignore
+        
+    - name: Upload ARM bootstrap
+      uses: actions/upload-artifact@v4
+      with:
+        name: bootstrap-arm
+        path: bootstrap-artifacts/bootstrap-arm.zip
+        retention-days: 90
+        if-no-files-found: ignore
+        
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: termux-packages/build.log
+        retention-days: 7
+        if-no-files-found: ignore
+
+  create-release:
+    name: Create Release (Optional)
+    needs: build-bootstrap
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: List downloaded artifacts
+      run: |
+        find artifacts -type f
+        
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(cat artifacts/termux-bootstrap-*/bootstrap-version.txt | grep "Version:" | cut -d' ' -f2)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Release version: $VERSION"
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      with:
+        tag_name: bootstrap-${{ steps.version.outputs.version }}
+        name: Termux Bootstrap for ${{ env.CUSTOM_PACKAGE_NAME }} - ${{ steps.version.outputs.version }}
+        body: |
+          ## Custom Termux Bootstrap
+          
+          This bootstrap has been compiled with custom package name: `${{ env.CUSTOM_PACKAGE_NAME }}`
+          
+          ### Supported Architectures
+          - aarch64 (ARM64) - Most modern Android devices
+          - arm (ARMv7) - Older 32-bit devices
+          
+          ### Usage
+          Download the appropriate bootstrap zip for your device's architecture and update the `BOOTSTRAP_URL` in your Android app's `TermuxBootstrap.java`.
+          
+          ### Checksums
+          See `checksums.sha256` file for verification.
+        files: |
+          artifacts/termux-bootstrap-*/bootstrap-*.zip
+          artifacts/termux-bootstrap-*/checksums.sha256
+          artifacts/termux-bootstrap-*/bootstrap-version.txt
+        draft: true
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

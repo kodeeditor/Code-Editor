@@ -96,7 +96,57 @@ Terminal sekarang mendukung package manager (pkg/apt) melalui Termux bootstrap:
 https://github.com/termux/termux-packages/releases/download/bootstrap-2025.12.14-r1+apt.android-7/bootstrap-aarch64.zip
 ```
 
+## Custom Termux Bootstrap (NEW - December 2025)
+
+### Problem
+The official Termux bootstrap has hardcoded paths for `com.termux` package:
+- `/data/data/com.termux/files/usr/...`
+
+This causes permission errors when used with `com.codeeditor.android`:
+```
+-l: /data/data/com.termux/files/usr/etc/profile: Permission denied
+termux:$ pkg
+-l: /data/user/0/com.codeeditor.android/files/usr/bin/pkg: /data/data/com.termux/files/usr/bin/bash: bad interpreter: Permission denied
+```
+
+### Solution
+A custom GitHub Actions workflow has been created to compile Termux bootstrap with the correct package name.
+
+### How to Build Custom Bootstrap
+
+1. **Push to GitHub** - Push this repository to your GitHub account
+
+2. **Run the Workflow**
+   - Go to Actions tab in your GitHub repository
+   - Select "Build Custom Termux Bootstrap" workflow
+   - Click "Run workflow"
+   - Choose architectures (default: aarch64,arm)
+   - Wait for build completion (may take 2-6 hours)
+
+3. **Download Artifacts**
+   - After build completes, download the bootstrap zip files from artifacts
+   - Or create a GitHub Release with the bootstrap files
+
+4. **Update BOOTSTRAP_URL**
+   - Edit `TermuxBootstrap.java`
+   - Replace `BOOTSTRAP_URL` with your GitHub Release URL
+   - Update `BOOTSTRAP_VERSION` accordingly
+
+### Workflow Details
+- File: `.github/workflows/build-termux-bootstrap.yml`
+- Clones termux-packages repository
+- Patches `scripts/properties.sh` to use `com.codeeditor.android`
+- Builds bootstrap using Docker
+- Generates checksums for verification
+- Uploads artifacts and optionally creates release
+
+### Supported Architectures
+- `aarch64` - ARM64 (most modern Android devices)
+- `arm` - ARMv7 (older 32-bit devices)
+- `i686` - x86 32-bit (emulators)
+- `x86_64` - x86 64-bit (some tablets/Chromebooks)
+
 ## Known Issues
 - GraalVM jlink not compatible with Android build - requires OpenJDK 17
 - LSP errors in TerminalActivity.java (Termux library imports)
-- Bootstrap hanya untuk aarch64 (ARM64) - perlu tambahkan support untuk ARM32, x86, x86_64
+- Bootstrap hanya untuk aarch64 (ARM64) by default - workflow now supports all architectures

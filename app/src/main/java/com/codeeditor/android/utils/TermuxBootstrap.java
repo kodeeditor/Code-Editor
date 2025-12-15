@@ -30,6 +30,29 @@ import java.util.zip.ZipInputStream;
 public class TermuxBootstrap {
     private static final String TAG = "TermuxBootstrap";
     
+    /**
+     * IMPORTANT: Custom Bootstrap Configuration
+     * 
+     * The official Termux bootstrap uses hardcoded paths for com.termux package.
+     * This app (com.codeeditor.android) requires a custom-compiled bootstrap.
+     * 
+     * To build a custom bootstrap:
+     * 1. Go to GitHub Actions in your repository
+     * 2. Run the "Build Custom Termux Bootstrap" workflow
+     * 3. Download the generated bootstrap-aarch64.zip artifact
+     * 4. Create a GitHub Release and upload the bootstrap
+     * 5. Update BOOTSTRAP_URL below with your release URL
+     * 
+     * The workflow patches termux-packages to use com.codeeditor.android paths:
+     * - /data/data/com.codeeditor.android/files/usr (instead of com.termux)
+     * 
+     * Without a custom bootstrap, you will see permission errors like:
+     * - "Permission denied" when running pkg/apt
+     * - "bad interpreter" errors
+     * 
+     * Current URL points to official Termux bootstrap (will cause errors).
+     * Replace with your custom bootstrap URL after building.
+     */
     private static final String BOOTSTRAP_URL = 
         "https://github.com/termux/termux-packages/releases/download/bootstrap-2025.12.14-r1%2Bapt.android-7/bootstrap-aarch64.zip";
     
