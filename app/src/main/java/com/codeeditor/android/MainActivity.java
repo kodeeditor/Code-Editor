@@ -1,12 +1,17 @@
 package com.codeeditor.android;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.KeyEvent;
@@ -21,8 +26,11 @@ import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.preference.PreferenceManager;
@@ -60,6 +68,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 public class MainActivity extends AppCompatActivity {
+    
+    private static final int STORAGE_PERMISSION_CODE = 100;
+    private static final int MANAGE_STORAGE_REQUEST_CODE = 101;
     
     private ActivityMainBinding binding;
     private GitHubAuthManager authManager;
@@ -141,9 +152,106 @@ public class MainActivity extends AppCompatActivity {
             updateWelcomeVisibility();
             
             handleIntent(getIntent());
+            
+            checkStoragePermission();
         } catch (Exception e) {
             showErrorDialog("Initialization Error", "Failed to initialize the application", e);
         }
+    }
+    
+    private void checkStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                showStoragePermissionDialog();
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
+                    != PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
+                    != PackageManager.PERMISSION_GRANTED) {
+                showStoragePermissionDialog();
+            }
+        }
+    }
+    
+    private void showStoragePermissionDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.storage_permission_title)
+            .setMessage(R.string.storage_permission_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.grant_permission, (dialog, which) -> {
+                requestStoragePermission();
+            })
+            .setNegativeButton(R.string.exit_app, (dialog, which) -> {
+                finish();
+            })
+            .show();
+    }
+    
+    private void requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, MANAGE_STORAGE_REQUEST_CODE);
+            } catch (Exception e) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                startActivityForResult(intent, MANAGE_STORAGE_REQUEST_CODE);
+            }
+        } else {
+            ActivityCompat.requestPermissions(this,
+                new String[]{
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                },
+                STORAGE_PERMISSION_CODE);
+        }
+    }
+    
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == STORAGE_PERMISSION_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, R.string.permission_granted, Toast.LENGTH_SHORT).show();
+            } else {
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.READ_EXTERNAL_STORAGE)) {
+                    showStoragePermissionDialog();
+                } else {
+                    showSettingsDialog();
+                }
+            }
+        }
+    }
+    
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == MANAGE_STORAGE_REQUEST_CODE) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (Environment.isExternalStorageManager()) {
+                    Toast.makeText(this, R.string.permission_granted, Toast.LENGTH_SHORT).show();
+                } else {
+                    showStoragePermissionDialog();
+                }
+            }
+        }
+    }
+    
+    private void showSettingsDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.permission_required)
+            .setMessage(R.string.permission_settings_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.open_settings, (dialog, which) -> {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            })
+            .setNegativeButton(R.string.exit_app, (dialog, which) -> {
+                finish();
+            })
+            .show();
     }
     
     private void showErrorDialog(String title, String message, Throwable error) {

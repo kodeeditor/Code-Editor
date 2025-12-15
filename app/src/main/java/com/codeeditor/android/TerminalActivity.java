@@ -1,8 +1,12 @@
 package com.codeeditor.android;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -14,7 +18,10 @@ import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.core.content.ContextCompat;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -29,6 +36,8 @@ import com.termux.terminal.TerminalSessionClient;
 import com.termux.view.TerminalView;
 import com.termux.view.TerminalViewClient;
 
+import com.codeeditor.android.utils.TermuxBootstrap;
+
 import java.io.File;
 
 public class TerminalActivity extends AppCompatActivity implements TerminalViewClient, TerminalSessionClient {
@@ -39,12 +48,16 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
     private TerminalView terminalView;
     private TerminalSession terminalSession;
     private ProgressBar progressBar;
+    private TextView progressText;
     private Handler mainHandler;
     private String workingDirectory;
     private int currentTextSize = 14;
     private boolean isSessionRunning = false;
     private String currentShellPath;
     private PowerManager.WakeLock wakeLock;
+    
+    private TermuxBootstrap termuxBootstrap;
+    private boolean useTermuxEnvironment = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +80,7 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
 
             terminalView = findViewById(R.id.terminal_view);
             progressBar = findViewById(R.id.progress_bar);
+            progressText = findViewById(R.id.progress_text);
 
             FloatingActionButton fabKeyboard = findViewById(R.id.fab_keyboard);
             if (fabKeyboard != null) {
@@ -78,11 +92,93 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
                 workingDirectory = getFilesDir().getAbsolutePath();
             }
 
-            setupTerminal();
+            if (!hasStoragePermission()) {
+                showStorageWarning();
+            }
+            
+            termuxBootstrap = new TermuxBootstrap(this);
+            
+            checkAndSetupBootstrap();
         } catch (Exception e) {
             Log.e(TAG, "Error in onCreate", e);
             showErrorDialog("Terminal Error", "Failed to initialize terminal: " + e.getMessage(), e);
         }
+    }
+    
+    private void checkAndSetupBootstrap() {
+        if (termuxBootstrap.isBootstrapInstalled()) {
+            useTermuxEnvironment = true;
+            setupTerminal();
+        } else {
+            showBootstrapInstallDialog();
+        }
+    }
+    
+    private void showBootstrapInstallDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle("Terminal Setup")
+            .setMessage("Untuk menggunakan package manager (pkg/apt), terminal perlu mengunduh dan menginstal Termux bootstrap (~50MB).\n\nDengan bootstrap, Anda dapat:\n• Install packages: pkg install python nodejs git\n• Kompilasi kode\n• Gunakan tools development\n\nInstal sekarang?")
+            .setPositiveButton("Install", (dialog, which) -> {
+                installBootstrap();
+            })
+            .setNegativeButton("Skip", (dialog, which) -> {
+                useTermuxEnvironment = false;
+                setupTerminal();
+            })
+            .setCancelable(false)
+            .show();
+    }
+    
+    private void installBootstrap() {
+        progressBar.setVisibility(View.VISIBLE);
+        if (progressText != null) {
+            progressText.setVisibility(View.VISIBLE);
+        }
+        terminalView.setVisibility(View.GONE);
+        
+        termuxBootstrap.setListener(new TermuxBootstrap.BootstrapListener() {
+            @Override
+            public void onProgress(String message, int progress) {
+                progressBar.setProgress(progress);
+                if (progressText != null) {
+                    progressText.setText(message);
+                }
+            }
+            
+            @Override
+            public void onSuccess() {
+                progressBar.setVisibility(View.GONE);
+                if (progressText != null) {
+                    progressText.setVisibility(View.GONE);
+                }
+                terminalView.setVisibility(View.VISIBLE);
+                useTermuxEnvironment = true;
+                setupTerminal();
+                Toast.makeText(TerminalActivity.this, 
+                    "Bootstrap installed! Gunakan 'pkg install <package>' untuk install packages.", 
+                    Toast.LENGTH_LONG).show();
+            }
+            
+            @Override
+            public void onError(String error) {
+                progressBar.setVisibility(View.GONE);
+                if (progressText != null) {
+                    progressText.setVisibility(View.GONE);
+                }
+                terminalView.setVisibility(View.VISIBLE);
+                
+                new AlertDialog.Builder(TerminalActivity.this)
+                    .setTitle("Installation Error")
+                    .setMessage("Gagal menginstal bootstrap:\n" + error + "\n\nMelanjutkan dengan shell dasar...")
+                    .setPositiveButton("OK", null)
+                    .show();
+                    
+                useTermuxEnvironment = false;
+                setupTerminal();
+            }
+        });
+        
+        termuxBootstrap.installBootstrap();
     }
     
     private void showErrorDialog(String title, String message, Throwable error) {
@@ -154,7 +250,7 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
                     PowerManager.PARTIAL_WAKE_LOCK, 
                     WAKELOCK_TAG
                 );
-                wakeLock.acquire(30 * 60 * 1000L); // 30 minutes max
+                wakeLock.acquire(30 * 60 * 1000L);
                 Log.d(TAG, "WakeLock acquired");
             }
         } catch (Exception e) {
@@ -176,6 +272,9 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
 
     private void setupTerminal() {
         progressBar.setVisibility(View.VISIBLE);
+        if (progressText != null) {
+            progressText.setText("Memulai terminal...");
+        }
 
         new Thread(() -> {
             try {
@@ -185,27 +284,44 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
                     try {
                         initTerminalSession(shellPath);
                         progressBar.setVisibility(View.GONE);
+                        if (progressText != null) {
+                            progressText.setVisibility(View.GONE);
+                        }
                     } catch (Exception e) {
                         Toast.makeText(this, "Terminal error: " + e.getMessage(), Toast.LENGTH_LONG).show();
                         progressBar.setVisibility(View.GONE);
+                        if (progressText != null) {
+                            progressText.setVisibility(View.GONE);
+                        }
                     }
                 });
             } catch (Exception e) {
                 mainHandler.post(() -> {
                     Toast.makeText(this, "Failed to start terminal: " + e.getMessage(), Toast.LENGTH_LONG).show();
                     progressBar.setVisibility(View.GONE);
+                    if (progressText != null) {
+                        progressText.setVisibility(View.GONE);
+                    }
                 });
             }
         }).start();
     }
 
     private String findShell() {
+        if (useTermuxEnvironment && termuxBootstrap != null) {
+            String bashPath = termuxBootstrap.getBashPath();
+            File bashFile = new File(bashPath);
+            if (bashFile.exists() && bashFile.canExecute()) {
+                return bashPath;
+            }
+        }
+        
         String[] possibleShells = {
+            getFilesDir().getAbsolutePath() + "/usr/bin/bash",
+            getFilesDir().getAbsolutePath() + "/usr/bin/sh",
             "/system/bin/sh",
             "/system/bin/bash",
-            "/system/xbin/bash",
-            "/data/data/" + getPackageName() + "/files/usr/bin/bash",
-            "/data/data/" + getPackageName() + "/files/usr/bin/sh"
+            "/system/xbin/bash"
         };
 
         for (String shell : possibleShells) {
@@ -227,9 +343,10 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
             
             currentShellPath = shellPath;
             String[] env = buildEnvironment();
-            String[] args = new String[]{"-i", "-l"};
+            String[] args = new String[]{"-l"};
             
             Log.d(TAG, "Initializing terminal with shell: " + shellPath);
+            Log.d(TAG, "Using Termux environment: " + useTermuxEnvironment);
 
             terminalView.setTerminalViewClient(this);
             
@@ -244,7 +361,7 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
 
             terminalSession = new TerminalSession(
                 shellPath,
-                workingDirectory,
+                useTermuxEnvironment ? termuxBootstrap.getHomePath() : workingDirectory,
                 args,
                 env,
                 TerminalEmulator.DEFAULT_TERMINAL_TRANSCRIPT_ROWS,
@@ -284,10 +401,14 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
                 Toast.makeText(this, "Failed to restart terminal: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 progressBar.setVisibility(View.GONE);
             }
-        }, 300); // Small delay to ensure previous session is cleaned up
+        }, 300);
     }
 
     private String[] buildEnvironment() {
+        if (useTermuxEnvironment && termuxBootstrap != null) {
+            return termuxBootstrap.buildTermuxEnvironment();
+        }
+        
         String homeDir = getFilesDir().getAbsolutePath() + "/home";
         String tmpDir = getCacheDir().getAbsolutePath();
         String path = "/system/bin:/system/xbin";
@@ -299,31 +420,59 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
 
         new File(homeDir).mkdirs();
         
-        // Create a basic .profile if it doesn't exist
+        String externalStorage = Environment.getExternalStorageDirectory().getAbsolutePath();
+        
         File profileFile = new File(homeDir, ".profile");
         if (!profileFile.exists()) {
             try {
                 java.io.FileWriter writer = new java.io.FileWriter(profileFile);
                 writer.write("# CodeEditor Terminal Profile\n");
                 writer.write("export PS1='$ '\n");
+                writer.write("# Storage shortcuts\n");
+                writer.write("alias sdcard='cd " + externalStorage + "'\n");
+                writer.write("alias storage='cd " + externalStorage + "'\n");
                 writer.close();
             } catch (Exception e) {
                 Log.e(TAG, "Error creating .profile", e);
             }
         }
 
-        return new String[] {
-            "HOME=" + homeDir,
-            "PATH=" + path,
-            "TERM=xterm-256color",
-            "TMPDIR=" + tmpDir,
-            "LANG=en_US.UTF-8",
-            "COLORTERM=truecolor",
-            "SHELL=/system/bin/sh",
-            "PS1=$ ",
-            "USER=shell",
-            "HOSTNAME=android"
-        };
+        java.util.List<String> envList = new java.util.ArrayList<>();
+        envList.add("HOME=" + homeDir);
+        envList.add("PATH=" + path);
+        envList.add("TERM=xterm-256color");
+        envList.add("TMPDIR=" + tmpDir);
+        envList.add("LANG=en_US.UTF-8");
+        envList.add("COLORTERM=truecolor");
+        envList.add("SHELL=/system/bin/sh");
+        envList.add("PS1=$ ");
+        envList.add("USER=shell");
+        envList.add("HOSTNAME=android");
+        envList.add("EXTERNAL_STORAGE=" + externalStorage);
+        envList.add("SECONDARY_STORAGE=" + externalStorage);
+        
+        if (hasStoragePermission()) {
+            envList.add("SDCARD=" + externalStorage);
+        }
+        
+        return envList.toArray(new String[0]);
+    }
+    
+    private boolean hasStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        } else {
+            return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
+                    == PackageManager.PERMISSION_GRANTED &&
+                   ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+    }
+    
+    private void showStorageWarning() {
+        Toast.makeText(this, 
+            "Storage permission not granted. Access to /sdcard may be limited.", 
+            Toast.LENGTH_LONG).show();
     }
 
     private void toggleKeyboard() {
@@ -347,10 +496,8 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
         super.onDestroy();
         isSessionRunning = false;
         
-        // Release WakeLock
         releaseWakeLock();
         
-        // Clear screen on flag
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         
         if (terminalSession != null) {
@@ -366,11 +513,9 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
     @Override
     protected void onResume() {
         super.onResume();
-        // Ensure terminal view has focus when activity resumes
         if (terminalView != null && isSessionRunning) {
             terminalView.requestFocus();
         }
-        // Re-acquire wakelock if needed
         if (wakeLock == null || !wakeLock.isHeld()) {
             acquireWakeLock();
         }
@@ -379,13 +524,11 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
     @Override
     protected void onPause() {
         super.onPause();
-        // Keep wakelock when paused but activity still exists
     }
     
     @Override
     protected void onStop() {
         super.onStop();
-        // Release wakelock when activity is stopped (not visible)
         releaseWakeLock();
     }
 
@@ -506,7 +649,6 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
         Log.d(TAG, "Terminal session finished");
         
         mainHandler.post(() -> {
-            // Show dialog to ask user what to do
             try {
                 new AlertDialog.Builder(this)
                     .setTitle("Terminal Session Ended")
@@ -521,7 +663,6 @@ public class TerminalActivity extends AppCompatActivity implements TerminalViewC
                     .show();
             } catch (Exception e) {
                 Log.e(TAG, "Error showing dialog", e);
-                // If dialog fails, just finish
                 finish();
             }
         });
