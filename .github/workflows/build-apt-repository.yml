@@ -378,71 +378,92 @@ jobs:
       
       - name: Generate directory index.html files
         run: |
-          # Function to create HTML index for directory with actual file listings
-          generate_index_with_files() {
-            local dir="$1"
-            local files_json="[]"
-            
-            # Build JSON array of files and directories
-            if [ -d "$dir" ]; then
-              local file_list=""
-              local first=true
+          # Python script to generate directory indexes with actual file listings
+          python3 << 'PYSCRIPT'
+          import os
+          import json
+          from pathlib import Path
+          from datetime import datetime
+          
+          def get_file_icon(name, is_dir):
+              if is_dir:
+                  return '📁'
+              elif name.endswith('.gz'):
+                  return '📦'
+              elif name.endswith('.html'):
+                  return '🌐'
+              elif name.endswith('.txt'):
+                  return '📄'
+              elif name.endswith('.json'):
+                  return '⚙️'
+              else:
+                  return '📄'
+          
+          def format_size(size):
+              for unit in ['B', 'KB', 'MB', 'GB']:
+                  if size < 1024:
+                      return f"{size:.1f} {unit}" if unit != 'B' else f"{size} {unit}"
+                  size /= 1024
+              return f"{size:.1f} TB"
+          
+          def generate_index_html(directory):
+              files_data = []
               
-              # Sort by name and process each item
-              for item in $(ls -1 "$dir" 2>/dev/null | sort); do
-                local filepath="$dir/$item"
-                
-                if [ ! -f "$dir/index.html" ] || [ "$filepath" != "$dir/index.html" ]; then
-                  if [ -z "$file_list" ]; then
-                    file_list="{"
-                  else
-                    file_list="$file_list,"
-                  fi
-                  
-                  if [ -d "$filepath" ]; then
-                    # It's a directory
-                    file_list="$file_list\"name\":\"$item\",\"type\":\"dir\",\"size\":0,\"modified\":$(stat -f%m "$filepath" 2>/dev/null || stat -c%Y "$filepath" 2>/dev/null || echo "0")000}"
-                  else
-                    # It's a file
-                    local size=$(stat -f%z "$filepath" 2>/dev/null || stat -c%s "$filepath" 2>/dev/null || echo "0")
-                    local mtime=$(stat -f%m "$filepath" 2>/dev/null || stat -c%Y "$filepath" 2>/dev/null || echo "0")
-                    file_list="$file_list\"name\":\"$item\",\"type\":\"file\",\"size\":$size,\"modified\":${mtime}000}"
-                  fi
-                fi
-              done
+              # Collect files and directories
+              try:
+                  for item in sorted(os.listdir(directory)):
+                      if item == 'index.html':
+                          continue
+                      
+                      item_path = os.path.join(directory, item)
+                      is_dir = os.path.isdir(item_path)
+                      
+                      try:
+                          stat = os.stat(item_path)
+                          size = stat.st_size if not is_dir else 0
+                          mtime = int(stat.st_mtime * 1000)
+                      except:
+                          size = 0
+                          mtime = 0
+                      
+                      files_data.append({
+                          'name': item,
+                          'type': 'dir' if is_dir else 'file',
+                          'size': size,
+                          'modified': mtime
+                      })
+              except Exception as e:
+                  print(f"Error reading directory {directory}: {e}")
               
-              if [ -n "$file_list" ]; then
-                files_json="[$file_list]"
-              fi
-            fi
-            
-            cat > "$dir/index.html" << EOF
-          <!DOCTYPE html>
+              # Generate HTML
+              files_json = json.dumps(files_data)
+              
+              html_content = f"""<!DOCTYPE html>
           <html>
           <head>
               <meta charset="UTF-8">
               <meta name="viewport" content="width=device-width, initial-scale=1.0">
               <title>Directory Index</title>
               <style>
-                  * { margin: 0; padding: 0; box-sizing: border-box; }
-                  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; }
-                  .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
-                  .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                  .header h1 { font-size: 28px; margin-bottom: 10px; }
-                  .header p { opacity: 0.9; }
-                  .file-list { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
-                  .file-item { display: flex; align-items: center; padding: 15px 20px; border-bottom: 1px solid #eee; transition: background 0.2s; }
-                  .file-item:hover { background: #f9f9f9; }
-                  .file-item:last-child { border-bottom: none; }
-                  .file-icon { font-size: 20px; margin-right: 15px; min-width: 24px; text-align: center; }
-                  .file-name { flex: 1; }
-                  .file-name a { color: #667eea; text-decoration: none; font-weight: 500; }
-                  .file-name a:hover { text-decoration: underline; }
-                  .file-size { color: #999; font-size: 12px; min-width: 80px; text-align: right; margin-right: 15px; }
-                  .file-date { color: #999; font-size: 12px; min-width: 150px; text-align: right; }
-                  .parent-link { background: #f0f0f0; }
-                  .parent-link .file-name a { color: #764ba2; }
-                  .empty { text-align: center; padding: 40px; color: #999; }
+                  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                  body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; }}
+                  .container {{ max-width: 1000px; margin: 0 auto; padding: 20px; }}
+                  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                  .header h1 {{ font-size: 28px; margin-bottom: 10px; }}
+                  .header p {{ opacity: 0.9; }}
+                  .file-list {{ background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }}
+                  .file-item {{ display: flex; align-items: center; padding: 15px 20px; border-bottom: 1px solid #eee; transition: background 0.2s; }}
+                  .file-item:hover {{ background: #f9f9f9; }}
+                  .file-item:last-child {{ border-bottom: none; }}
+                  .file-icon {{ font-size: 20px; margin-right: 15px; min-width: 24px; text-align: center; }}
+                  .file-name {{ flex: 1; }}
+                  .file-name a {{ color: #667eea; text-decoration: none; font-weight: 500; }}
+                  .file-name a:hover {{ text-decoration: underline; }}
+                  .file-size {{ color: #999; font-size: 12px; min-width: 80px; text-align: right; margin-right: 15px; }}
+                  .file-date {{ color: #999; font-size: 12px; min-width: 150px; text-align: right; }}
+                  .parent-link {{ background: #f0f0f0; }}
+                  .parent-link .file-name a {{ color: #764ba2; }}
+                  .empty {{ text-align: center; padding: 40px; color: #999; }}
               </style>
           </head>
           <body>
@@ -455,40 +476,40 @@ jobs:
               </div>
               
               <script>
-                  const FILES_DATA = $files_json;
+                  const FILES_DATA = {files_json};
                   
-                  function formatFileSize(bytes) {
+                  function formatFileSize(bytes) {{
                       if (bytes === 0) return '-';
                       const k = 1024;
                       const sizes = ['B', 'KB', 'MB', 'GB'];
                       const i = Math.floor(Math.log(bytes) / Math.log(k));
                       return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
-                  }
+                  }}
                   
-                  function formatDate(timestamp) {
-                      return new Date(timestamp).toLocaleString('en-US', {
+                  function formatDate(timestamp) {{
+                      return new Date(timestamp).toLocaleString('en-US', {{
                           year: 'numeric', month: '2-digit', day: '2-digit',
                           hour: '2-digit', minute: '2-digit'
-                      });
-                  }
+                      }});
+                  }}
                   
-                  function loadDirectory() {
+                  function loadDirectory() {{
                       const fileList = document.getElementById('file-list');
                       const currentPath = window.location.pathname;
                       
                       let html = '';
                       
                       // Add parent directory link
-                      if (currentPath !== '/' && currentPath !== '') {
+                      if (currentPath !== '/' && currentPath !== '') {{
                           html += '<div class="file-item parent-link">';
                           html += '<div class="file-icon">📂</div>';
                           html += '<div class="file-name"><a href="../">.. (Parent Directory)</a></div>';
                           html += '</div>';
-                      }
+                      }}
                       
                       // Add files and directories
-                      if (FILES_DATA && FILES_DATA.length > 0) {
-                          FILES_DATA.forEach(file => {
+                      if (FILES_DATA && FILES_DATA.length > 0) {{
+                          FILES_DATA.forEach(file => {{
                               const icon = file.type === 'dir' ? '📁' : (
                                   file.name.endsWith('.gz') ? '📦' :
                                   file.name.endsWith('.html') ? '🌐' :
@@ -502,52 +523,62 @@ jobs:
                               html += '<div class="file-size">' + formatFileSize(file.size) + '</div>';
                               html += '<div class="file-date">' + formatDate(file.modified) + '</div>';
                               html += '</div>';
-                          });
-                      } else {
+                          }});
+                      }} else {{
                           html = '<div class="empty">📭 This directory is empty</div>';
-                      }
+                      }}
                       
                       fileList.innerHTML = html;
-                  }
+                  }}
                   
                   document.addEventListener('DOMContentLoaded', loadDirectory);
               </script>
           </body>
-          </html>
-          EOF
-          }
+          </html>"""
+              
+              return html_content
           
-          # Recursively generate index.html for all directories
-          create_indexes_recursive() {
-            local dir="$1"
-            
-            if [ -d "$dir" ]; then
-              # Create index.html for current directory
-              generate_index_with_files "$dir"
-              echo "✓ Created index.html in: $dir"
+          def process_directory_recursive(directory):
+              if not os.path.isdir(directory):
+                  return
+              
+              # Generate index.html for current directory
+              try:
+                  html_content = generate_index_html(directory)
+                  index_path = os.path.join(directory, 'index.html')
+                  
+                  with open(index_path, 'w', encoding='utf-8') as f:
+                      f.write(html_content)
+                  print(f"✓ Created index.html in: {directory}")
+              except Exception as e:
+                  print(f"✗ Error creating index.html in {directory}: {e}")
               
               # Process subdirectories
-              for subdir in "$dir"/*; do
-                if [ -d "$subdir" ] && [ "$(basename "$subdir")" != ".git" ]; then
-                  create_indexes_recursive "$subdir"
-                fi
-              done
-            fi
-          }
+              for item in os.listdir(directory):
+                  item_path = os.path.join(directory, item)
+                  if os.path.isdir(item_path) and item != '.git':
+                      process_directory_recursive(item_path)
           
           # Generate indexes for all directories
-          echo "=========================================="
-          echo "Generating Directory Indexes with File Listings"
-          echo "=========================================="
+          print("=" * 42)
+          print("Generating Directory Indexes with File Listings")
+          print("=" * 42)
           
-          create_indexes_recursive "gh-pages-final"
+          process_directory_recursive("gh-pages-final")
           
           # List all generated index files
-          echo ""
-          echo "Generated index.html files:"
-          find gh-pages-final -name "index.html" -type f | sort
-          echo ""
-          echo "✅ Directory indexes generated successfully with file listings"
+          print("")
+          print("Generated index.html files:")
+          for root, dirs, files in os.walk("gh-pages-final"):
+              if 'index.html' in files:
+                  print(os.path.join(root, 'index.html'))
+          print("")
+          print("✅ Directory indexes generated successfully with file listings")
+          PYSCRIPT
+          
+          echo "=========================================="
+          echo "Index generation completed"
+          echo "=========================================="
       
       - name: Deploy to GitHub Pages
         env:
