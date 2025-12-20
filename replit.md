@@ -149,49 +149,30 @@ A custom GitHub Actions workflow has been created to compile Termux bootstrap wi
 ## Package Recompilation and APT Server Upload (NEW - December 2025)
 
 ### Overview
-A new GitHub Actions workflow has been created to automatically recompile all Termux packages with the custom `com.codeeditor.android` namespace and upload them to an APT server.
+A new GitHub Actions workflow has been created to automatically recompile **all** Termux packages with the custom `com.codeeditor.android` namespace and upload them to an APT server.
 
 ### Workflow File
 - **File:** `.github/workflows/recompile-and-upload-apt.yml`
 - **Name:** "Recompile and Upload Termux Packages"
 
 ### Features
-- Recompile Termux packages for multiple architectures (aarch64, arm, i686, x86_64)
-- Package filtering support (build specific packages only)
-- Two upload modes:
-  - GitHub Pages (deb [trusted=yes] repo URL)
+- ⚡ Recompile **all** Termux packages automatically
+- 🏗️ Support multiple architectures (aarch64, arm, i686, x86_64)
+- 📦 Two upload modes:
+  - GitHub Pages (automatic deployment)
   - External APT server (SSH/SFTP)
-- Automatic package index generation
-- Build reports and artifacts
-- Weekly auto-run schedule (Sunday at 2 AM)
+- 🔄 Automatic package index generation
+- 📊 Build reports and artifacts
+- 📅 Weekly auto-run schedule (Sunday at 2 AM)
 
-### Build Presets
-
-The workflow supports 4 build presets for flexibility:
-
-#### 1. **popular** (Default)
-Builds most commonly used packages:
-- **Languages:** Node.js, Python, PHP, Lua, Perl, Ruby, Golang, Rust, Clang
+### Included Packages
+The workflow builds all Termux packages including:
+- **Programming Languages:** Node.js, Python, PHP, Ruby, Golang, Rust, Lua, Perl, Clang, Java
 - **Tools:** Git, Curl, Wget, OpenSSH, Vim, Nano, Bash, Zsh, Fish
 - **Development:** Make, CMake, GCC, G++, Cargo, Node-gyp
-- **Utilities:** FFmpeg, ImageMagick, SQLite, Redis, Htop, Tmux, Screen
-- **Estimated time:** 4-8 hours per architecture
-
-#### 2. **all**
-Builds every package in the Termux repository
-- Complete package set (~200+ packages)
-- Requires significant disk space and time
-- **Estimated time:** 24+ hours per architecture
-
-#### 3. **custom**
-Builds packages matching a pattern (regex)
-- Use `package_filter` with pattern (e.g., `.*python.*` for all Python packages)
-- **Example:** Filter `node.*` to build Node.js and related packages
-
-#### 4. **single**
-Builds exactly one package by name
-- Use `package_filter` with exact package name
-- **Example:** `nodejs`, `python`, `php`, `git`, etc.
+- **Databases:** SQLite, PostgreSQL, MySQL, Redis, MongoDB
+- **Utilities:** FFmpeg, ImageMagick, Htop, Tmux, Screen, Jq, Docker
+- **And many more...**
 
 ### Usage
 
@@ -200,33 +181,28 @@ Builds exactly one package by name
 2. Select "Recompile and Upload Termux Packages" workflow
 3. Click "Run workflow"
 4. Configure:
-   - **build_preset**: one of `popular`, `all`, `custom`, `single` (default: popular)
-   - **architectures**: comma-separated list (aarch64,arm,i686,x86_64)
-   - **package_filter**: for custom/single mode only (e.g., `nodejs`, `*python*`)
-   - **upload_mode**: github-pages or external-apt
+   - **architectures**: comma-separated list (default: aarch64)
+     - Options: `aarch64`, `arm`, `i686`, `x86_64`
+   - **upload_mode**: where to upload (default: github-pages)
+     - Options: `github-pages` or `external-apt`
 
 #### Examples
 
-**Build popular packages for aarch64 (Default)**
-- build_preset: `popular`
+**Build all packages for aarch64 (Default)**
 - architectures: `aarch64`
 - upload_mode: `github-pages`
 
-**Build only Node.js and related packages**
-- build_preset: `custom`
-- architectures: `aarch64`
-- package_filter: `node.*`
-
-**Build single package (PHP for multiple architectures)**
-- build_preset: `single`
+**Build all packages for multiple architectures**
 - architectures: `aarch64,arm`
-- package_filter: `php`
 - upload_mode: `github-pages`
 
-**Build everything (all packages)**
-- build_preset: `all`
-- architectures: `aarch64` (⚠️ very long!)
+**Build for all architectures**
+- architectures: `aarch64,arm,i686,x86_64`
 - upload_mode: `github-pages`
+
+**Upload to external APT server**
+- architectures: `aarch64`
+- upload_mode: `external-apt` (requires APT server secrets configured)
 
 ### Repository Configuration
 

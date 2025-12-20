@@ -3,18 +3,10 @@ name: Recompile and Upload Termux Packages
 on:
   workflow_dispatch:
     inputs:
-      build_preset:
-        description: 'Build preset (all/popular/custom/single)'
-        required: false
-        default: 'popular'
       architectures:
         description: 'Architectures to build (aarch64,arm,i686,x86_64)'
         required: false
         default: 'aarch64'
-      package_filter:
-        description: 'For custom/single mode: package pattern or name (e.g., nodejs, python, php, curl)'
-        required: false
-        default: ''
       upload_mode:
         description: 'Upload mode (github-pages/external-apt)'
         required: false
@@ -160,116 +152,16 @@ jobs:
           
           cat build-env.conf
       
-      - name: Determine packages to build
-        if: steps.set_arch.outputs.skip == 'false'
-        id: build_list
-        run: |
-          BUILD_PRESET="${{ github.event.inputs.build_preset }}"
-          PKG_FILTER="${{ github.event.inputs.package_filter }}"
-          ARCH="${{ env.ARCH }}"
-          
-          echo "=========================================="
-          echo "Determining Packages to Build"
-          echo "=========================================="
-          echo "Preset: $BUILD_PRESET"
-          echo "Filter: ${PKG_FILTER:-none}"
-          
-          # Define popular packages
-          POPULAR_PACKAGES=(
-            "nodejs"
-            "nodejs-lts"
-            "node-gyp"
-            "npm"
-            "python"
-            "python-pip"
-            "python-dev"
-            "php"
-            "php-fpm"
-            "git"
-            "git-lfs"
-            "curl"
-            "wget"
-            "openssh"
-            "vim"
-            "nano"
-            "bash"
-            "zsh"
-            "fish"
-            "lua"
-            "perl"
-            "ruby"
-            "golang"
-            "rustc"
-            "cargo"
-            "make"
-            "cmake"
-            "gcc"
-            "g++"
-            "clang"
-            "ffmpeg"
-            "imagemagick"
-            "sqlite"
-            "postgresql"
-            "mysql"
-            "redis"
-            "mongodb"
-            "docker"
-            "git-lfs"
-            "aws-cli"
-            "neofetch"
-            "htop"
-            "tmux"
-            "screen"
-            "jq"
-            "curl"
-            "httpie"
-            "youtube-dl"
-          )
-          
-          case "$BUILD_PRESET" in
-            all)
-              echo "BUILD_PRESET=all" >> $GITHUB_OUTPUT
-              echo "Building all packages from Termux repository"
-              ;;
-            popular)
-              echo "BUILD_PRESET=popular" >> $GITHUB_OUTPUT
-              PACKAGES_JSON=$(printf '%s\n' "${POPULAR_PACKAGES[@]}" | jq -R . | jq -s .)
-              echo "packages=$PACKAGES_JSON" >> $GITHUB_OUTPUT
-              echo "Building ${#POPULAR_PACKAGES[@]} popular packages"
-              ;;
-            custom)
-              echo "BUILD_PRESET=custom" >> $GITHUB_OUTPUT
-              if [ -z "$PKG_FILTER" ]; then
-                echo "ERROR: custom preset requires package_filter"
-                exit 1
-              fi
-              echo "Building packages matching: $PKG_FILTER"
-              ;;
-            single)
-              echo "BUILD_PRESET=single" >> $GITHUB_OUTPUT
-              if [ -z "$PKG_FILTER" ]; then
-                echo "ERROR: single preset requires package name in package_filter"
-                exit 1
-              fi
-              echo "Building single package: $PKG_FILTER"
-              ;;
-            *)
-              echo "Unknown preset: $BUILD_PRESET, using popular"
-              echo "BUILD_PRESET=popular" >> $GITHUB_OUTPUT
-              ;;
-          esac
       
-      - name: Recompile Termux packages
+      - name: Recompile all Termux packages
         if: steps.set_arch.outputs.skip == 'false'
         run: |
           cd build-system
           ARCH="${{ env.ARCH }}"
           PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
-          BUILD_PRESET="${{ steps.build_list.outputs.BUILD_PRESET }}"
-          PKG_FILTER="${{ github.event.inputs.package_filter }}"
           
           echo "=========================================="
-          echo "Recompiling Termux Packages ($BUILD_PRESET)"
+          echo "Recompiling All Termux Packages"
           echo "=========================================="
           
           if [ ! -d "packages/packages" ]; then
@@ -279,57 +171,20 @@ jobs:
           
           cd packages
           
-          # Get list of packages to build
+          # Build all packages
           PACKAGES_TO_BUILD=()
-          
-          case "$BUILD_PRESET" in
-            all)
-              # Build all packages
-              for pkg_dir in packages/*/; do
-                PACKAGES_TO_BUILD+=("$(basename "$pkg_dir")")
-              done
-              ;;
-            popular)
-              # Build only popular packages that exist
-              POPULAR_PACKAGES=(
-                "nodejs" "python" "php" "git" "curl" "wget" "openssh" "vim" "nano"
-                "bash" "lua" "perl" "ruby" "golang" "rustc" "make" "cmake" "gcc"
-                "ffmpeg" "imagemagick" "sqlite" "redis" "htop" "tmux" "screen"
-              )
-              for pop_pkg in "${POPULAR_PACKAGES[@]}"; do
-                if [ -d "packages/$pop_pkg" ]; then
-                  PACKAGES_TO_BUILD+=("$pop_pkg")
-                fi
-              done
-              ;;
-            custom)
-              # Filter packages by pattern
-              for pkg_dir in packages/*/; do
-                PKG_DIR_NAME=$(basename "$pkg_dir")
-                if [[ "$PKG_DIR_NAME" =~ $PKG_FILTER ]]; then
-                  PACKAGES_TO_BUILD+=("$PKG_DIR_NAME")
-                fi
-              done
-              ;;
-            single)
-              # Build single package
-              if [ -d "packages/$PKG_FILTER" ]; then
-                PACKAGES_TO_BUILD+=("$PKG_FILTER")
-              else
-                echo "ERROR: Package '$PKG_FILTER' not found"
-                exit 1
-              fi
-              ;;
-          esac
+          for pkg_dir in packages/*/; do
+            PACKAGES_TO_BUILD+=("$(basename "$pkg_dir")")
+          done
           
           echo "Found ${#PACKAGES_TO_BUILD[@]} package(s) to build"
           
           # Create build status file
           > ../build-output/${ARCH}/build-status.txt
           
-          # Build each package
+          # Process all packages
           for pkg in "${PACKAGES_TO_BUILD[@]}"; do
-            echo "Building: $pkg"
+            echo "Processing: $pkg"
             
             if [ -f "packages/${pkg}/build.sh" ]; then
               # Extract package metadata
@@ -342,7 +197,7 @@ jobs:
           done
           
           echo "Package compilation metadata collected"
-          cat ../build-output/${ARCH}/build-status.txt | head -30
+          cat ../build-output/${ARCH}/build-status.txt | head -50
       
       - name: Create DEB packages with custom namespace
         if: steps.set_arch.outputs.skip == 'false'
