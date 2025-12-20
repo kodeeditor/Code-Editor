@@ -450,8 +450,7 @@ jobs:
                               
                               <div class="step">
                                   <strong>Update and install packages:</strong>
-                                  <pre>sudo apt update
-sudo apt install termux-bootstrap</pre>
+                                  <pre>sudo apt update && sudo apt install termux-bootstrap</pre>
                               </div>
                           </div>
                       </div>
