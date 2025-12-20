@@ -165,6 +165,34 @@ A new GitHub Actions workflow has been created to automatically recompile all Te
 - Build reports and artifacts
 - Weekly auto-run schedule (Sunday at 2 AM)
 
+### Build Presets
+
+The workflow supports 4 build presets for flexibility:
+
+#### 1. **popular** (Default)
+Builds most commonly used packages:
+- **Languages:** Node.js, Python, PHP, Lua, Perl, Ruby, Golang, Rust, Clang
+- **Tools:** Git, Curl, Wget, OpenSSH, Vim, Nano, Bash, Zsh, Fish
+- **Development:** Make, CMake, GCC, G++, Cargo, Node-gyp
+- **Utilities:** FFmpeg, ImageMagick, SQLite, Redis, Htop, Tmux, Screen
+- **Estimated time:** 4-8 hours per architecture
+
+#### 2. **all**
+Builds every package in the Termux repository
+- Complete package set (~200+ packages)
+- Requires significant disk space and time
+- **Estimated time:** 24+ hours per architecture
+
+#### 3. **custom**
+Builds packages matching a pattern (regex)
+- Use `package_filter` with pattern (e.g., `.*python.*` for all Python packages)
+- **Example:** Filter `node.*` to build Node.js and related packages
+
+#### 4. **single**
+Builds exactly one package by name
+- Use `package_filter` with exact package name
+- **Example:** `nodejs`, `python`, `php`, `git`, etc.
+
 ### Usage
 
 #### Manual Trigger
@@ -172,14 +200,32 @@ A new GitHub Actions workflow has been created to automatically recompile all Te
 2. Select "Recompile and Upload Termux Packages" workflow
 3. Click "Run workflow"
 4. Configure:
-   - **architectures**: Comma-separated list (aarch64,arm,i686,x86_64)
-   - **package_filter**: Pattern to match packages (optional, e.g., *curl* for curl packages)
+   - **build_preset**: one of `popular`, `all`, `custom`, `single` (default: popular)
+   - **architectures**: comma-separated list (aarch64,arm,i686,x86_64)
+   - **package_filter**: for custom/single mode only (e.g., `nodejs`, `*python*`)
    - **upload_mode**: github-pages or external-apt
 
-#### Example
-Build only Python packages for aarch64:
+#### Examples
+
+**Build popular packages for aarch64 (Default)**
+- build_preset: `popular`
 - architectures: `aarch64`
-- package_filter: `*python*`
+- upload_mode: `github-pages`
+
+**Build only Node.js and related packages**
+- build_preset: `custom`
+- architectures: `aarch64`
+- package_filter: `node.*`
+
+**Build single package (PHP for multiple architectures)**
+- build_preset: `single`
+- architectures: `aarch64,arm`
+- package_filter: `php`
+- upload_mode: `github-pages`
+
+**Build everything (all packages)**
+- build_preset: `all`
+- architectures: `aarch64` (⚠️ very long!)
 - upload_mode: `github-pages`
 
 ### Repository Configuration
