@@ -172,7 +172,7 @@ EOF
             SHA1_SUM=$(sha1sum "$PACKAGE_FILE" | cut -d' ' -f1)
             
             # Generate Packages entry
-            cat >> "$REPO_DIR/dists/stable/main/binary-$ARCH/Packages" << EOF
+          cat >> "$REPO_DIR/dists/stable/main/binary-$ARCH/Packages" << EOF
 
 Package: termux-bootstrap
 Version: 2025.12.14-r1
@@ -193,7 +193,7 @@ Priority: required
 Section: base
 
 EOF
-            
+
             echo "Package metadata added for termux-bootstrap"
           fi
           
@@ -496,7 +496,7 @@ This is a custom APT repository for **${CUSTOM_PKG}** that provides modified Ter
 
 \`\`\`bash
 # Add repository
-echo "deb [trusted=yes] https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/ stable main" > \\\$PREFIX/etc/apt/sources.list.d/codeeditor.list
+echo "deb [trusted=yes] https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/ stable main" > \$PREFIX/etc/apt/sources.list.d/codeeditor.list
 
 # Update package lists
 apt update
@@ -607,7 +607,7 @@ EOF
             
             **Configuration:**
             ```bash
-            echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/ stable main" > \$PREFIX/etc/apt/sources.list.d/codeeditor.list
+            echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/ stable main" > $PREFIX/etc/apt/sources.list.d/codeeditor.list
             apt update
             ```
             
