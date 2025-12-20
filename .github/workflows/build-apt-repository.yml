@@ -168,12 +168,14 @@ jobs:
           # Create Packages.gz
           gzip -9c dists/stable/main/binary-${ARCH}/Packages > dists/stable/main/binary-${ARCH}/Packages.gz
           
+          # Create source directory first
+          mkdir -p dists/stable/main/source
+          
           # Create Sources file
           cat > dists/stable/main/source/Sources << EOF
           EOF
           
           # Create Sources.gz
-          mkdir -p dists/stable/main/source
           gzip -9c dists/stable/main/source/Sources > dists/stable/main/source/Sources.gz
           
           echo "Repository structure created"
