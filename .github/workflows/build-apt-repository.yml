@@ -232,7 +232,7 @@ jobs:
           
           cat > apt-config/sources.list << 'EOF'
           # Default Termux repositories - replaced with custom build
-          deb [trusted=yes] https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt stable main
+          deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main
           
           # Fallback to original Termux packages (optional, comment out to use only custom)
           # deb https://packages.termux.dev/apt termux main
@@ -253,7 +253,7 @@ jobs:
           
           # Create sources list
           cat > "$PREFIX/etc/apt/sources.list.d/custom.list" << SOURCES
-          deb [trusted=yes] https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt stable main
+          deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main
           SOURCES
           
           echo "Package manager configured"
@@ -344,13 +344,13 @@ jobs:
                   <div class="info">
                       <h2>Overview</h2>
                       <p>This is a custom Termux package repository compiled for <code>com.codeeditor.android</code> package name.</p>
-                      <p><strong>Repository URL:</strong> <code>https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt</code></p>
+                      <p><strong>Repository URL:</strong> <code>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt</code></p>
                   </div>
                   
                   <div class="info">
                       <h2>Configuration</h2>
                       <p>To use this repository in your Code Editor installation, add the following to <code>$PREFIX/etc/apt/sources.list</code>:</p>
-                      <pre>deb [trusted=yes] https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt stable main</pre>
+                      <pre>deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main</pre>
                   </div>
                   
                   <div class="info">
@@ -405,7 +405,7 @@ jobs:
           git push -u origin ${{ env.GH_PAGES_BRANCH }} --force
           
           echo "✅ Deployed to GitHub Pages"
-          echo "APT Repository: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt"
+          echo "APT Repository: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt"
       
       - name: Create release with bootstrap
         if: success()

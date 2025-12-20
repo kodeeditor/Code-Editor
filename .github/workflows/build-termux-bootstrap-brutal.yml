@@ -200,21 +200,29 @@ jobs:
           
           mkdir -p ../output/bootstrap-extract
           
-          # Find original bootstrap file
-          BOOTSTRAP_ZIP=$(ls bootstrap-${ARCH}.zip 2>/dev/null || find . -name "bootstrap-${ARCH}.zip" -type f | head -1)
+          # Find original bootstrap file (look in current directory first)
+          if [ -f "bootstrap-${ARCH}.zip" ]; then
+            BOOTSTRAP_ZIP="bootstrap-${ARCH}.zip"
+          else
+            BOOTSTRAP_ZIP=$(find . -name "bootstrap-${ARCH}.zip" -type f | grep -v bootstrap-extract | head -1)
+          fi
           
           if [ -z "$BOOTSTRAP_ZIP" ] || [ ! -f "$BOOTSTRAP_ZIP" ]; then
             echo "ERROR: bootstrap-${ARCH}.zip not found!"
-            find . -name "bootstrap-*.zip" -type f 2>/dev/null
+            echo "Searching in current directory:"
+            ls -la *.zip 2>/dev/null || echo "No zip files found"
+            echo "Searching recursively:"
+            find . -name "bootstrap-*.zip" -type f 2>/dev/null | head -10
             exit 1
           fi
           
           echo "Found bootstrap: $BOOTSTRAP_ZIP"
+          BOOTSTRAP_ZIP_ABS=$(cd "$(dirname "$BOOTSTRAP_ZIP")" && pwd -P)/$(basename "$BOOTSTRAP_ZIP")
           
           # Extract bootstrap
-          echo "Extracting bootstrap..."
+          echo "Extracting bootstrap from: $BOOTSTRAP_ZIP_ABS"
           cd ../output/bootstrap-extract
-          unzip -q "../../../termux-packages/$BOOTSTRAP_ZIP"
+          unzip -q "$BOOTSTRAP_ZIP_ABS"
           
           # Replace all com.termux references in extracted files
           echo "Replacing com.termux references in extracted files..."
