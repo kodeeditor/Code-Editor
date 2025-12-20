@@ -78,7 +78,10 @@ jobs:
           PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
           
           # Create the complete APT repository structure
-          mkdir -p gh-pages-content/${{ env.REPO_PATH }}/{dists/stable/main/binary-$ARCH,pool/main,tmp,project}
+          mkdir -p gh-pages-content/${{ env.REPO_PATH }}/dists/stable/main/binary-$ARCH
+          mkdir -p gh-pages-content/${{ env.REPO_PATH }}/pool/main
+          mkdir -p gh-pages-content/${{ env.REPO_PATH }}/tmp
+          mkdir -p gh-pages-content/${{ env.REPO_PATH }}/project
           
           echo "=========================================="
           echo "Creating Proper APT Repository Structure"
@@ -100,13 +103,13 @@ Date: $(date -Ru)
 EOF
           
           # Create Packages file template
-          cat > gh-pages-content/${{ env.REPO_PATH }}/dists/stable/main/binary-$ARCH/Packages << 'EOF'
+          cat > gh-pages-content/${{ env.REPO_PATH }}/dists/stable/main/binary-$ARCH/Packages << EOF
 # Custom Termux packages for com.codeeditor.android
 # This is an auto-generated APT repository
 EOF
           
           echo "Repository structure created"
-          tree -L 4 gh-pages-content/
+          tree -L 4 gh-pages-content/ 2>/dev/null || find gh-pages-content -type d | sort
       
       - name: Download and prepare Termux bootstrap
         run: |
@@ -136,8 +139,7 @@ EOF
           unzip -q bootstrap-${ARCH}.zip -d bootstrap-extract/
           
           echo "Replacing com.termux with ${{ env.CUSTOM_PACKAGE_NAME }}..."
-          find bootstrap-extract -type f -name "*.zip" -exec sh -c 'unzip -q "$1" -d "${1%.zip}.tmp" && rm "$1"' _ {} \;
-          find bootstrap-extract -type f \( -name "*.xml" -o -name "*.properties" -o -name "*.txt" \) -exec sed -i "s/com\.termux/${{ env.CUSTOM_PACKAGE_NAME }}/g" {} \; 2>/dev/null || true
+          find bootstrap-extract -type f \( -name "*.xml" -o -name "*.properties" -o -name "*.txt" -o -name "*.json" \) -exec sed -i "s/com\.termux/${{ env.CUSTOM_PACKAGE_NAME }}/g" {} \; 2>/dev/null || true
           
           # Repackage as tar.gz for APT repository
           cd bootstrap-extract
@@ -263,7 +265,7 @@ EOF
             echo "Date: $(date -Ru)"
             echo ""
             echo "MD5Sum:"
-            find . -type f -name "Packages*" -o -name "Release*" | sort | while read file; do
+            find . -type f \( -name "Packages*" -o -name "Release*" \) | sort | while read file; do
               if [ -f "$file" ]; then
                 size=$(stat -c%s "$file")
                 md5=$(md5sum "$file" | cut -d' ' -f1)
@@ -272,7 +274,7 @@ EOF
             done
             echo ""
             echo "SHA256:"
-            find . -type f -name "Packages*" -o -name "Release*" | sort | while read file; do
+            find . -type f \( -name "Packages*" -o -name "Release*" \) | sort | while read file; do
               if [ -f "$file" ]; then
                 size=$(stat -c%s "$file")
                 sha256=$(sha256sum "$file" | cut -d' ' -f1)
@@ -281,7 +283,7 @@ EOF
             done
             echo ""
             echo "SHA1:"
-            find . -type f -name "Packages*" -o -name "Release*" | sort | while read file; do
+            find . -type f \( -name "Packages*" -o -name "Release*" \) | sort | while read file; do
               if [ -f "$file" ]; then
                 size=$(stat -c%s "$file")
                 sha1=$(sha1sum "$file" | cut -d' ' -f1)
@@ -307,6 +309,13 @@ EOF
           echo "=========================================="
           echo "Creating Documentation"
           echo "=========================================="
+          
+          # Use environment variables in the HTML template
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+          RUN_NUMBER="${{ github.run_number }}"
+          ARCH="${{ github.event.inputs.architectures || 'aarch64' }}"
+          CUSTOM_PKG="${{ env.CUSTOM_PACKAGE_NAME }}"
           
           # Create main index.html
           cat > "$REPO_DIR/index.html" << EOF
@@ -408,18 +417,18 @@ EOF
         
         <div class="url-box">
             <strong>APT Repository URL:</strong><br>
-            <code>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/</code>
+            <code>https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/</code>
         </div>
         
         <div class="card">
             <h2>🎯 Overview</h2>
-            <p>This is a custom APT repository for <strong>${{ env.CUSTOM_PACKAGE_NAME }}</strong> containing modified Termux packages with proper package naming for use with Code Editor application.</p>
+            <p>This is a custom APT repository for <strong>${CUSTOM_PKG}</strong> containing modified Termux packages with proper package naming for use with Code Editor application.</p>
         </div>
         
         <div class="card">
             <h2>⚙️ Configuration</h2>
             <p>Add this repository to your Termux/Code Editor installation:</p>
-            <code>echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/ stable main" > \$PREFIX/etc/apt/sources.list.d/codeeditor.list</code>
+            <code>echo "deb [trusted=yes] https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/ stable main" > \$PREFIX/etc/apt/sources.list.d/codeeditor.list</code>
             
             <p>Then update and install packages:</p>
             <code>apt update && apt install termux-bootstrap</code>
@@ -432,11 +441,11 @@ EOF
             </div>
             <div class="info-item">
                 <h3>🏗️ Build ID</h3>
-                <p>${{ github.run_number }}</p>
+                <p>${RUN_NUMBER}</p>
             </div>
             <div class="info-item">
                 <h3>📊 Architecture</h3>
-                <p>${{ github.event.inputs.architectures || 'aarch64' }}</p>
+                <p>${ARCH}</p>
             </div>
             <div class="info-item">
                 <h3>📦 Packages</h3>
@@ -449,17 +458,17 @@ EOF
             <p><strong>Repository Structure:</strong> Standard Debian APT repository format</p>
             <p><strong>Package Format:</strong> .tar.gz archives</p>
             <p><strong>Supported Architectures:</strong> aarch64, arm, i686, x86_64</p>
-            <p><strong>Package Prefix:</strong> ${{ env.CUSTOM_PACKAGE_NAME }}</p>
+            <p><strong>Package Prefix:</strong> ${CUSTOM_PKG}</p>
         </div>
         
         <div style="text-align: center; margin-top: 30px;">
-            <a href="https://github.com/${{ github.repository }}" class="button">📁 View Source</a>
-            <a href="/${{ env.REPO_PATH }}/dists/stable/" class="button">📦 Browse Packages</a>
-            <a href="/${{ env.REPO_PATH }}/pool/main/" class="button">🗃️ View Pool</a>
+            <a href="https://github.com/${REPO_OWNER}/${REPO_NAME}" class="button">📁 View Source</a>
+            <a href="/apt/dists/stable/" class="button">📦 Browse Packages</a>
+            <a href="/apt/pool/main/" class="button">🗃️ View Pool</a>
         </div>
         
         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; text-align: center; color: #666; font-size: 14px;">
-            <p>Automatically generated by GitHub Actions • Repository: <a href="https://github.com/${{ github.repository }}">${{ github.repository }}</a></p>
+            <p>Automatically generated by GitHub Actions • Repository: <a href="https://github.com/${REPO_OWNER}/${REPO_NAME}">${REPO_OWNER}/${REPO_NAME}</a></p>
         </div>
     </div>
 </body>
@@ -471,7 +480,7 @@ EOF
 # Code Editor APT Repository Configuration
 # Add this to \$PREFIX/etc/apt/sources.list.d/codeeditor.list
 
-deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/ stable main
+deb [trusted=yes] https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/ stable main
 
 # Optional: Fallback to official Termux repository
 # deb https://packages.termux.org/apt/termux-main/ stable main
@@ -481,13 +490,13 @@ EOF
           cat > "$REPO_DIR/README.md" << EOF
 # Code Editor APT Repository
 
-This is a custom APT repository for **${{ env.CUSTOM_PACKAGE_NAME }}** that provides modified Termux packages with proper package naming.
+This is a custom APT repository for **${CUSTOM_PKG}** that provides modified Termux packages with proper package naming.
 
 ## Quick Start
 
 \`\`\`bash
 # Add repository
-echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt/ stable main" > \\\$PREFIX/etc/apt/sources.list.d/codeeditor.list
+echo "deb [trusted=yes] https://${REPO_OWNER}.github.io/${REPO_NAME}/apt/ stable main" > \\\$PREFIX/etc/apt/sources.list.d/codeeditor.list
 
 # Update package lists
 apt update
@@ -514,16 +523,16 @@ apt/
 
 ## Available Packages
 
-- **termux-bootstrap**: Modified Termux bootstrap with ${{ env.CUSTOM_PACKAGE_NAME }} package naming
+- **termux-bootstrap**: Modified Termux bootstrap with ${CUSTOM_PKG} package naming
 - **base-files**: Essential system files
 - **apt**: Package management system
 
 ## Build Information
 
-- **Build ID**: ${{ github.run_number }}
+- **Build ID**: ${RUN_NUMBER}
 - **Build Date**: $(date)
-- **Architecture**: ${{ github.event.inputs.architectures || 'aarch64' }}
-- **Repository**: https://github.com/${{ github.repository }}
+- **Architecture**: ${ARCH}
+- **Repository**: https://github.com/${REPO_OWNER}/${REPO_NAME}
 
 ## Troubleshooting
 
@@ -537,7 +546,7 @@ If you encounter issues:
 ## Support
 
 For issues and questions, please visit:
-https://github.com/${{ github.repository }}/issues
+https://github.com/${REPO_OWNER}/${REPO_NAME}/issues
 EOF
           
           echo "Documentation created"
