@@ -378,13 +378,45 @@ jobs:
       
       - name: Generate directory index.html files
         run: |
-          # Function to create HTML index for directory
-          generate_index() {
+          # Function to create HTML index for directory with actual file listings
+          generate_index_with_files() {
             local dir="$1"
-            local title="$2"
-            local repo_path="${{ env.REPO_PATH }}"
+            local files_json="[]"
             
-            cat > "$dir/index.html" << 'INDEXEOF'
+            # Build JSON array of files and directories
+            if [ -d "$dir" ]; then
+              local file_list=""
+              local first=true
+              
+              # Sort by name and process each item
+              for item in $(ls -1 "$dir" 2>/dev/null | sort); do
+                local filepath="$dir/$item"
+                
+                if [ ! -f "$dir/index.html" ] || [ "$filepath" != "$dir/index.html" ]; then
+                  if [ -z "$file_list" ]; then
+                    file_list="{"
+                  else
+                    file_list="$file_list,"
+                  fi
+                  
+                  if [ -d "$filepath" ]; then
+                    # It's a directory
+                    file_list="$file_list\"name\":\"$item\",\"type\":\"dir\",\"size\":0,\"modified\":$(stat -f%m "$filepath" 2>/dev/null || stat -c%Y "$filepath" 2>/dev/null || echo "0")000}"
+                  else
+                    # It's a file
+                    local size=$(stat -f%z "$filepath" 2>/dev/null || stat -c%s "$filepath" 2>/dev/null || echo "0")
+                    local mtime=$(stat -f%m "$filepath" 2>/dev/null || stat -c%Y "$filepath" 2>/dev/null || echo "0")
+                    file_list="$file_list\"name\":\"$item\",\"type\":\"file\",\"size\":$size,\"modified\":${mtime}000}"
+                  fi
+                fi
+              done
+              
+              if [ -n "$file_list" ]; then
+                files_json="[$file_list]"
+              fi
+            fi
+            
+            cat > "$dir/index.html" << EOF
           <!DOCTYPE html>
           <html>
           <head>
@@ -411,24 +443,20 @@ jobs:
                   .parent-link { background: #f0f0f0; }
                   .parent-link .file-name a { color: #764ba2; }
                   .empty { text-align: center; padding: 40px; color: #999; }
-                  .breadcrumb { margin-bottom: 20px; }
-                  .breadcrumb a { color: #667eea; text-decoration: none; margin: 0 5px; }
-                  .breadcrumb a:hover { text-decoration: underline; }
               </style>
           </head>
           <body>
               <div class="container">
                   <div class="header">
                       <h1>📁 Directory Index</h1>
-                      <p id="path-display">Path: /</p>
                   </div>
                   
-                  <div id="file-list" class="file-list">
-                      <div class="empty">Loading...</div>
-                  </div>
+                  <div id="file-list" class="file-list"></div>
               </div>
               
               <script>
+                  const FILES_DATA = $files_json;
+                  
                   function formatFileSize(bytes) {
                       if (bytes === 0) return '-';
                       const k = 1024;
@@ -437,66 +465,56 @@ jobs:
                       return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
                   }
                   
-                  function formatDate(date) {
-                      return new Date(date).toLocaleString('en-US', {
+                  function formatDate(timestamp) {
+                      return new Date(timestamp).toLocaleString('en-US', {
                           year: 'numeric', month: '2-digit', day: '2-digit',
                           hour: '2-digit', minute: '2-digit'
                       });
                   }
                   
-                  async function loadDirectory() {
-                      try {
-                          const response = await fetch(window.location.pathname + '?json');
-                          
-                          // Fallback: parse directory from DOM or use static list
-                          const fileList = document.getElementById('file-list');
-                          const currentPath = window.location.pathname;
-                          
-                          // Create parent directory link if not at root
-                          let html = '';
-                          if (currentPath !== '/' && currentPath !== '/apt/' && currentPath !== '/apt') {
-                              html += `<div class="file-item parent-link">
-                                  <div class="file-icon">📂</div>
-                                  <div class="file-name"><a href="../">.. (Parent Directory)</a></div>
-                              </div>`;
-                          }
-                          
-                          // If we have a data attribute, use it
-                          const dataAttr = fileList.getAttribute('data-files');
-                          if (dataAttr) {
-                              const files = JSON.parse(dataAttr);
-                              if (files.length === 0) {
-                                  html = '<div class="empty">📭 This directory is empty</div>';
-                              } else {
-                                  files.forEach(file => {
-                                      const icon = file.type === 'dir' ? '📁' : (
-                                          file.name.endsWith('.gz') ? '📦' :
-                                          file.name.endsWith('.html') ? '🌐' :
-                                          '📄'
-                                      );
-                                      html += `<div class="file-item">
-                                          <div class="file-icon">${icon}</div>
-                                          <div class="file-name"><a href="${file.name}${file.type === 'dir' ? '/' : ''}">${file.name}</a></div>
-                                          <div class="file-size">${formatFileSize(file.size)}</div>
-                                          <div class="file-date">${formatDate(file.modified)}</div>
-                                      </div>`;
-                                  });
-                              }
-                          } else {
-                              html = '<div class="empty">📭 Directory is empty</div>';
-                          }
-                          
-                          fileList.innerHTML = html;
-                      } catch (error) {
-                          console.error('Error loading directory:', error);
+                  function loadDirectory() {
+                      const fileList = document.getElementById('file-list');
+                      const currentPath = window.location.pathname;
+                      
+                      let html = '';
+                      
+                      // Add parent directory link
+                      if (currentPath !== '/' && currentPath !== '') {
+                          html += '<div class="file-item parent-link">';
+                          html += '<div class="file-icon">📂</div>';
+                          html += '<div class="file-name"><a href="../">.. (Parent Directory)</a></div>';
+                          html += '</div>';
                       }
+                      
+                      // Add files and directories
+                      if (FILES_DATA && FILES_DATA.length > 0) {
+                          FILES_DATA.forEach(file => {
+                              const icon = file.type === 'dir' ? '📁' : (
+                                  file.name.endsWith('.gz') ? '📦' :
+                                  file.name.endsWith('.html') ? '🌐' :
+                                  file.name.endsWith('.txt') ? '📄' :
+                                  file.name.endsWith('.json') ? '⚙️' :
+                                  '📄'
+                              );
+                              html += '<div class="file-item">';
+                              html += '<div class="file-icon">' + icon + '</div>';
+                              html += '<div class="file-name"><a href="' + file.name + (file.type === 'dir' ? '/' : '') + '">' + file.name + '</a></div>';
+                              html += '<div class="file-size">' + formatFileSize(file.size) + '</div>';
+                              html += '<div class="file-date">' + formatDate(file.modified) + '</div>';
+                              html += '</div>';
+                          });
+                      } else {
+                          html = '<div class="empty">📭 This directory is empty</div>';
+                      }
+                      
+                      fileList.innerHTML = html;
                   }
                   
                   document.addEventListener('DOMContentLoaded', loadDirectory);
               </script>
           </body>
           </html>
-          INDEXEOF
+          EOF
           }
           
           # Recursively generate index.html for all directories
@@ -505,10 +523,8 @@ jobs:
             
             if [ -d "$dir" ]; then
               # Create index.html for current directory
-              if [ ! -f "$dir/index.html" ] || grep -q "INDEXEOF" "$dir/index.html"; then
-                generate_index "$dir" "Directory Index"
-                echo "✓ Created index.html in: $dir"
-              fi
+              generate_index_with_files "$dir"
+              echo "✓ Created index.html in: $dir"
               
               # Process subdirectories
               for subdir in "$dir"/*; do
@@ -521,7 +537,7 @@ jobs:
           
           # Generate indexes for all directories
           echo "=========================================="
-          echo "Generating Directory Indexes"
+          echo "Generating Directory Indexes with File Listings"
           echo "=========================================="
           
           create_indexes_recursive "gh-pages-final"
@@ -531,7 +547,7 @@ jobs:
           echo "Generated index.html files:"
           find gh-pages-final -name "index.html" -type f | sort
           echo ""
-          echo "✅ Directory indexes generated successfully"
+          echo "✅ Directory indexes generated successfully with file listings"
       
       - name: Deploy to GitHub Pages
         env:
