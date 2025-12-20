@@ -91,34 +91,41 @@ jobs:
       
       - name: Extract and prepare packages
         run: |
-          mkdir -p packages-extracted
-          cd termux-packages/repo/packages
+          WORKSPACE_ROOT=$(pwd)
+          mkdir -p "$WORKSPACE_ROOT/packages-extracted"
           
-          echo "=========================================="
-          echo "Extracting Package Information"
-          echo "=========================================="
-          
-          ARCH="${{ github.event.inputs.architectures }}"
-          ARCH="${ARCH:-aarch64}"
-          
-          # Create package list
-          for pkg_dir in */; do
-            if [ -f "$pkg_dir/build.sh" ]; then
-              PKG_NAME=$(basename "$pkg_dir")
-              echo "Processing: $PKG_NAME"
-              
-              # Extract build information
-              if grep -q "TERMUX_PKG_NAME" "$pkg_dir/build.sh"; then
-                TERMUX_PKG_NAME=$(grep "^TERMUX_PKG_NAME=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
-                TERMUX_PKG_VERSION=$(grep "^TERMUX_PKG_VERSION=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
+          if [ -d "termux-packages/repo/packages" ]; then
+            cd "$WORKSPACE_ROOT/termux-packages/repo/packages"
+            
+            echo "=========================================="
+            echo "Extracting Package Information"
+            echo "=========================================="
+            
+            ARCH="${{ github.event.inputs.architectures }}"
+            ARCH="${ARCH:-aarch64}"
+            
+            # Create package list
+            for pkg_dir in */; do
+              if [ -f "$pkg_dir/build.sh" ]; then
+                PKG_NAME=$(basename "$pkg_dir")
+                echo "Processing: $PKG_NAME"
                 
-                echo "$TERMUX_PKG_NAME $TERMUX_PKG_VERSION" >> ../../packages-extracted/manifest.txt
+                # Extract build information
+                if grep -q "TERMUX_PKG_NAME" "$pkg_dir/build.sh"; then
+                  TERMUX_PKG_NAME=$(grep "^TERMUX_PKG_NAME=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
+                  TERMUX_PKG_VERSION=$(grep "^TERMUX_PKG_VERSION=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
+                  
+                  echo "$TERMUX_PKG_NAME $TERMUX_PKG_VERSION" >> "$WORKSPACE_ROOT/packages-extracted/manifest.txt"
+                fi
               fi
-            fi
-          done
-          
-          echo "Package manifest created"
-          wc -l ../../packages-extracted/manifest.txt
+            done
+            
+            echo "Package manifest created"
+            wc -l "$WORKSPACE_ROOT/packages-extracted/manifest.txt"
+          else
+            echo "Termux packages directory not found, skipping manifest creation"
+            touch "$WORKSPACE_ROOT/packages-extracted/manifest.txt"
+          fi
       
       - name: Create custom package repository structure
         run: |
