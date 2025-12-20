@@ -146,7 +146,74 @@ A custom GitHub Actions workflow has been created to compile Termux bootstrap wi
 - `i686` - x86 32-bit (emulators)
 - `x86_64` - x86 64-bit (some tablets/Chromebooks)
 
+## Package Recompilation and APT Server Upload (NEW - December 2025)
+
+### Overview
+A new GitHub Actions workflow has been created to automatically recompile all Termux packages with the custom `com.codeeditor.android` namespace and upload them to an APT server.
+
+### Workflow File
+- **File:** `.github/workflows/recompile-and-upload-apt.yml`
+- **Name:** "Recompile and Upload Termux Packages"
+
+### Features
+- Recompile Termux packages for multiple architectures (aarch64, arm, i686, x86_64)
+- Package filtering support (build specific packages only)
+- Two upload modes:
+  - GitHub Pages (deb [trusted=yes] repo URL)
+  - External APT server (SSH/SFTP)
+- Automatic package index generation
+- Build reports and artifacts
+- Weekly auto-run schedule (Sunday at 2 AM)
+
+### Usage
+
+#### Manual Trigger
+1. Go to GitHub Actions tab
+2. Select "Recompile and Upload Termux Packages" workflow
+3. Click "Run workflow"
+4. Configure:
+   - **architectures**: Comma-separated list (aarch64,arm,i686,x86_64)
+   - **package_filter**: Pattern to match packages (optional, e.g., *curl* for curl packages)
+   - **upload_mode**: github-pages or external-apt
+
+#### Example
+Build only Python packages for aarch64:
+- architectures: `aarch64`
+- package_filter: `*python*`
+- upload_mode: `github-pages`
+
+### Repository Configuration
+
+#### GitHub Pages (Default)
+APT repository is automatically deployed to GitHub Pages:
+```bash
+deb [trusted=yes] https://{owner}.github.io/{repo-name}/apt stable main
+```
+
+#### External APT Server
+Set these secrets in GitHub:
+- `APT_REPO_URL` - Server URL/hostname
+- `APT_REPO_USER` - SSH username
+- `APT_REPO_PASSWORD` - Optional password
+- `APT_REPO_SSH_KEY` - SSH private key (for key-based auth)
+- `APT_REPO_PATH` - Path on server (/home/user/apt-repo)
+
+### Available Packages
+After running the workflow, users can:
+```bash
+apt update
+apt install base-files
+apt install [package-name]
+```
+
+### Build Artifacts
+Each build generates:
+- DEB packages for selected architecture
+- Build report (markdown)
+- Complete APT repository structure
+- Available on Actions artifacts page (30-day retention)
+
 ## Known Issues
 - GraalVM jlink not compatible with Android build - requires OpenJDK 17
 - LSP errors in TerminalActivity.java (Termux library imports)
-- Bootstrap hanya untuk aarch64 (ARM64) by default - workflow now supports all architectures
+- Package compilation requires adequate disk space and build time (multi-hour builds possible)
