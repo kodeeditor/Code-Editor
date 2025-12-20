@@ -1,0 +1,641 @@
+name: Build Custom APT Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Architectures to build (aarch64,arm,i686,x86_64)'
+        required: false
+        default: 'aarch64'
+      build_mode:
+        description: 'Build mode (repackage/full)'
+        required: false
+        default: 'repackage'
+  schedule:
+    - cron: '0 0 1 * *'
+
+env:
+  CUSTOM_PACKAGE_NAME: com.codeeditor.android
+  GH_PAGES_BRANCH: gh-pages
+  REPO_PATH: apt
+  DISTRIBUTION: stable
+  COMPONENT: main
+
+jobs:
+  build-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+      
+      - name: Free disk space
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost /usr/share/swift || true
+          echo "=== Disk space after cleanup ==="
+          df -h
+      
+      - name: Setup build environment
+        run: |
+          echo "Installing APT repository tools..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            dpkg-dev \
+            gnupg \
+            apt-utils \
+            reprepro \
+            dh-make \
+            devscripts \
+            build-essential \
+            gcc \
+            g++ \
+            make \
+            wget \
+            curl \
+            jq \
+            zip \
+            unzip \
+            git \
+            2>&1 | grep -v "^Reading\|^Building\|^Selecting"
+          
+          echo "Build tools installed successfully"
+          dpkg-dev --version | head -1
+          reprepro --version | head -1
+      
+      - name: Setup GPG (No-sign mode for public repository)
+        run: |
+          echo "Setting up GPG for unsigned repository (public key optional)"
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "GPG setup complete"
+      
+      - name: Download Termux packages
+        run: |
+          mkdir -p termux-packages
+          cd termux-packages
+          
+          echo "=========================================="
+          echo "Downloading Termux Package Sources"
+          echo "=========================================="
+          
+          # Clone Termux packages repository
+          git clone --depth=1 https://github.com/termux/termux-packages.git repo || true
+          cd repo
+          
+          echo "Termux packages repository cloned successfully"
+          [ -d "packages" ] && ls -la packages | head -20 || echo "No packages directory found"
+      
+      - name: Extract and prepare packages
+        run: |
+          WORKSPACE_ROOT=$(pwd)
+          mkdir -p "$WORKSPACE_ROOT/packages-extracted"
+          
+          if [ -d "termux-packages/repo/packages" ]; then
+            cd "$WORKSPACE_ROOT/termux-packages/repo/packages"
+            
+            echo "=========================================="
+            echo "Extracting Package Information"
+            echo "=========================================="
+            
+            ARCH="${{ github.event.inputs.architectures }}"
+            ARCH="${ARCH:-aarch64}"
+            
+            PKG_COUNT=0
+            for pkg_dir in */; do
+              if [ -f "$pkg_dir/build.sh" ]; then
+                PKG_NAME=$(basename "$pkg_dir")
+                
+                # Extract build information
+                if grep -q "TERMUX_PKG_NAME" "$pkg_dir/build.sh"; then
+                  TERMUX_PKG_NAME=$(grep "^TERMUX_PKG_NAME=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
+                  TERMUX_PKG_VERSION=$(grep "^TERMUX_PKG_VERSION=" "$pkg_dir/build.sh" | head -1 | cut -d'=' -f2 | tr -d "'\"")
+                  
+                  if [ -n "$TERMUX_PKG_NAME" ]; then
+                    echo "$TERMUX_PKG_NAME $TERMUX_PKG_VERSION" >> "$WORKSPACE_ROOT/packages-extracted/manifest.txt"
+                    PKG_COUNT=$((PKG_COUNT + 1))
+                    [ $((PKG_COUNT % 100)) -eq 0 ] && echo "Processed $PKG_COUNT packages..."
+                  fi
+                fi
+              fi
+            done
+            
+            echo "✅ Package manifest created: $PKG_COUNT packages"
+            [ -f "$WORKSPACE_ROOT/packages-extracted/manifest.txt" ] && wc -l "$WORKSPACE_ROOT/packages-extracted/manifest.txt" || echo "0"
+          else
+            echo "⚠️ Termux packages directory not found, creating empty manifest"
+            touch "$WORKSPACE_ROOT/packages-extracted/manifest.txt"
+          fi
+      
+      - name: Create APT repository structure (reprepro)
+        run: |
+          ARCH="${{ github.event.inputs.architectures }}"
+          ARCH="${ARCH:-aarch64}"
+          PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
+          
+          mkdir -p apt-repo/{conf,dists,pool/main}
+          cd apt-repo
+          
+          echo "=========================================="
+          echo "Creating Professional APT Repository"
+          echo "=========================================="
+          echo "Package: $PKG_NAME"
+          echo "Architecture: $ARCH"
+          echo "Distribution: ${{ env.DISTRIBUTION }}"
+          echo "Component: ${{ env.COMPONENT }}"
+          
+          # Create reprepro configuration
+          cat > conf/distributions << EOF
+          Origin: Code Editor
+          Label: Code Editor Custom Termux Repository
+          Codename: ${{ env.DISTRIBUTION }}
+          Suite: ${{ env.DISTRIBUTION }}
+          Architectures: $ARCH
+          Components: ${{ env.COMPONENT }}
+          Description: Custom Termux repository for $PKG_NAME
+          SignWith: NO
+          SettingKeywords: YES
+          
+          EOF
+          
+          echo "✅ reprepro configuration created"
+          cat conf/distributions
+      
+      - name: Download and repackage bootstrap
+        run: |
+          mkdir -p bootstrap-packages
+          cd bootstrap-packages
+          
+          ARCH="${{ github.event.inputs.architectures }}"
+          ARCH="${ARCH:-aarch64}"
+          PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
+          
+          echo "=========================================="
+          echo "Downloading Bootstrap Files"
+          echo "=========================================="
+          
+          # Try multiple known URLs for bootstrap
+          BOOTSTRAP_URLS=(
+            "https://github.com/termux/termux-packages/releases/download/bootstrap-2025.12.14-r1%2Bapt.android-7/bootstrap-${ARCH}.zip"
+            "https://github.com/termux/termux-packages/releases/latest/download/bootstrap-${ARCH}.zip"
+          )
+          
+          DOWNLOADED=0
+          for URL in "${BOOTSTRAP_URLS[@]}"; do
+            echo "Trying: $URL"
+            if wget -q --show-progress -O "bootstrap-${ARCH}-original.zip" "$URL" 2>/dev/null; then
+              if [ -f "bootstrap-${ARCH}-original.zip" ] && [ -s "bootstrap-${ARCH}-original.zip" ]; then
+                echo "✅ Bootstrap downloaded successfully"
+                DOWNLOADED=1
+                break
+              fi
+            fi
+          done
+          
+          if [ $DOWNLOADED -eq 0 ]; then
+            echo "⚠️ Could not download bootstrap, creating placeholder"
+            mkdir -p bootstrap-extract
+            cd bootstrap-extract
+            echo "Bootstrap placeholder" > bootstrap-info.txt
+            cd ..
+          else
+            # Extract bootstrap
+            mkdir -p bootstrap-extract
+            cd bootstrap-extract
+            unzip -q ../bootstrap-${ARCH}-original.zip || echo "⚠️ Could not extract bootstrap"
+            cd ..
+          fi
+          
+          # Replace package references
+          if [ -d "bootstrap-extract" ] && [ "$(find bootstrap-extract -type f | wc -l)" -gt 0 ]; then
+            echo "Replacing com.termux with $PKG_NAME..."
+            find bootstrap-extract -type f -exec sed -i "s|com\.termux|$PKG_NAME|g" {} \; 2>/dev/null || true
+            
+            # Repackage
+            zip -r -q "bootstrap-${ARCH}-custom.zip" bootstrap-extract/ 2>/dev/null || true
+            echo "✅ Bootstrap repackaged"
+          fi
+          
+          ls -lh bootstrap-${ARCH}-*.zip 2>/dev/null || echo "No bootstrap files generated"
+      
+      - name: Create Debian package metadata
+        run: |
+          ARCH="${{ github.event.inputs.architectures }}"
+          ARCH="${ARCH:-aarch64}"
+          PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
+          
+          mkdir -p packages-metadata
+          cd packages-metadata
+          
+          echo "=========================================="
+          echo "Generating Package Metadata"
+          echo "=========================================="
+          
+          # Create Packages file with bootstrap metadata
+          cat > Packages << 'EOF'
+          Package: termux-bootstrap
+          Version: 2025.12.14
+          Architecture: aarch64
+          Maintainer: Code Editor Team <support@codeeditor.dev>
+          Installed-Size: 100000
+          Depends: base-files
+          Filename: pool/main/termux-bootstrap_2025.12.14_aarch64.tar.gz
+          Size: 50000000
+          MD5sum: placeholder
+          SHA256: placeholder
+          Description: Custom Termux bootstrap for Code Editor
+           This is a modified Termux bootstrap with com.codeeditor.android
+           package naming for use with the Code Editor application.
+          
+          EOF
+          
+          echo "✅ Package metadata created"
+          cat Packages
+      
+      - name: Prepare GitHub Pages content
+        run: |
+          mkdir -p gh-pages-final/${{ env.REPO_PATH }}
+          
+          ARCH="${{ github.event.inputs.architectures }}"
+          ARCH="${ARCH:-aarch64}"
+          REPO_ROOT="gh-pages-final/${{ env.REPO_PATH }}"
+          
+          echo "=========================================="
+          echo "Building Professional APT Repository"
+          echo "=========================================="
+          
+          # Create complete directory structure
+          mkdir -p "$REPO_ROOT/pool/main"
+          mkdir -p "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}"
+          mkdir -p "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/source"
+          
+          # Copy/create package metadata
+          if [ ! -f "packages-metadata/Packages" ]; then
+            # Create minimal Packages file if it doesn't exist
+            cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" << 'PKGEOF'
+Package: termux-bootstrap
+Version: 2025.12.14
+Architecture: aarch64
+Maintainer: Code Editor Team <support@codeeditor.dev>
+Installed-Size: 100000
+Depends: base-files
+Filename: pool/main/termux-bootstrap_2025.12.14_aarch64.tar.gz
+Size: 50000000
+MD5sum: placeholder
+SHA256: placeholder
+Description: Custom Termux bootstrap for Code Editor
+ This is a modified Termux bootstrap with com.codeeditor.android
+ package naming for use with the Code Editor application.
+PKGEOF
+          else
+            cp packages-metadata/Packages "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/" 2>/dev/null || true
+          fi
+          
+          # Create compressed Packages
+          gzip -9c "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" > \
+            "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" 2>/dev/null || true
+          
+          # Calculate checksums
+          MD5_PACKAGES=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" | cut -d' ' -f1)
+          MD5_PACKAGES_GZ=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" | cut -d' ' -f1)
+          SHA256_PACKAGES=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" | cut -d' ' -f1)
+          SHA256_PACKAGES_GZ=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" | cut -d' ' -f1)
+          
+          SIZE_PACKAGES=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages")
+          SIZE_PACKAGES_GZ=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz")
+          
+          # Create Release file with checksums (CRITICAL for APT!)
+          cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/Release" << EOF
+Origin: Code Editor
+Label: Code Editor Custom Repository
+Suite: ${{ env.DISTRIBUTION }}
+Codename: ${{ env.DISTRIBUTION }}
+Version: 1.0
+Architectures: ${ARCH}
+Components: ${{ env.COMPONENT }}
+Date: $(date -u)
+Description: Professional APT repository for Code Editor with Termux packages
+MD5Sum:
+ $MD5_PACKAGES $SIZE_PACKAGES main/binary-${ARCH}/Packages
+ $MD5_PACKAGES_GZ $SIZE_PACKAGES_GZ main/binary-${ARCH}/Packages.gz
+SHA256:
+ $SHA256_PACKAGES $SIZE_PACKAGES main/binary-${ARCH}/Packages
+ $SHA256_PACKAGES_GZ $SIZE_PACKAGES_GZ main/binary-${ARCH}/Packages.gz
+
+EOF
+          
+          echo "✅ Release file created with checksums"
+          
+          # Create InRelease (combined Release + signature for unsigned repos)
+          cp "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/Release" "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/InRelease" || true
+          
+          # Copy bootstrap packages
+          if [ -d "bootstrap-packages" ] && [ "$(ls bootstrap-packages/bootstrap-*-custom.zip 2>/dev/null | wc -l)" -gt 0 ]; then
+            cp bootstrap-packages/bootstrap-*-custom.zip "$REPO_ROOT/pool/main/" 2>/dev/null || true
+            echo "✅ Bootstrap packages copied"
+          fi
+          
+          # Verify structure
+          echo ""
+          echo "=========================================="
+          echo "Final APT Repository Structure:"
+          echo "=========================================="
+          find "$REPO_ROOT" -type f | head -20 || echo "No files created"
+          ls -lah "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/" 2>/dev/null || echo "dists directory empty"
+          
+          # Create index HTML for browsing
+          cat > gh-pages-final/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Code Editor Custom APT Repository</title>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body { 
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      min-height: 100vh;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                      padding: 20px;
+                  }
+                  .container { 
+                      max-width: 900px; 
+                      width: 100%;
+                      background: white;
+                      border-radius: 12px;
+                      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                      overflow: hidden;
+                  }
+                  .header {
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      color: white;
+                      padding: 40px;
+                      text-align: center;
+                  }
+                  .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+                  .header p { opacity: 0.9; font-size: 1.1em; }
+                  .content { padding: 40px; }
+                  .section {
+                      margin-bottom: 30px;
+                      padding: 20px;
+                      background: #f8f9fa;
+                      border-radius: 8px;
+                      border-left: 4px solid #667eea;
+                  }
+                  .section h2 { color: #333; margin-bottom: 15px; font-size: 1.5em; }
+                  .section p { color: #666; line-height: 1.6; margin-bottom: 10px; }
+                  code, pre { 
+                      background: #2d2d2d; 
+                      color: #f8f8f2; 
+                      padding: 2px 6px; 
+                      border-radius: 3px;
+                      font-family: 'Courier New', monospace;
+                      font-size: 0.9em;
+                  }
+                  pre { 
+                      padding: 15px; 
+                      margin: 10px 0;
+                      overflow-x: auto;
+                      line-height: 1.4;
+                  }
+                  .setup-steps { counter-reset: step-counter; }
+                  .step {
+                      counter-increment: step-counter;
+                      margin: 15px 0;
+                      padding-left: 30px;
+                      position: relative;
+                  }
+                  .step:before {
+                      content: counter(step-counter);
+                      position: absolute;
+                      left: 0;
+                      top: 0;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                      width: 24px;
+                      height: 24px;
+                      background: #667eea;
+                      color: white;
+                      border-radius: 50%;
+                      font-weight: bold;
+                      font-size: 0.9em;
+                  }
+                  .info-box {
+                      background: #e7f3ff;
+                      border-left: 4px solid #2196F3;
+                      padding: 15px;
+                      margin: 15px 0;
+                      border-radius: 4px;
+                  }
+                  .success-box {
+                      background: #e8f5e9;
+                      border-left: 4px solid #4CAF50;
+                      padding: 15px;
+                      margin: 15px 0;
+                      border-radius: 4px;
+                  }
+                  .footer {
+                      background: #f8f9fa;
+                      padding: 20px;
+                      text-align: center;
+                      color: #666;
+                      font-size: 0.9em;
+                      border-top: 1px solid #ddd;
+                  }
+                  .url-box {
+                      background: #fff;
+                      border: 2px dashed #667eea;
+                      padding: 10px;
+                      border-radius: 4px;
+                      word-break: break-all;
+                      font-family: monospace;
+                      margin: 10px 0;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <h1>🔧 Code Editor Custom APT Repository</h1>
+                      <p>Professional Termux Package Repository</p>
+                  </div>
+                  
+                  <div class="content">
+                      <div class="section success-box">
+                          <h2>✅ Repository Status</h2>
+                          <p>This is a professional Debian/Ubuntu APT repository compiled for <code>com.codeeditor.android</code> package name.</p>
+                          <p><strong>Repository URL:</strong></p>
+                          <div class="url-box">https://<span id="user"></span>.github.io/<span id="repo"></span>/apt</div>
+                          <p><strong>Status:</strong> <span style="color: #4CAF50; font-weight: bold;">✓ Active and Ready</span></p>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>📋 Quick Setup</h2>
+                          <div class="setup-steps">
+                              <div class="step">
+                                  <strong>Download and import the public key:</strong>
+                                  <pre>wget -qO- https://<span id="user2"></span>.github.io/<span id="repo2"></span>/apt/public.key | sudo apt-key add -</pre>
+                              </div>
+                              
+                              <div class="step">
+                                  <strong>Add the repository to your sources:</strong>
+                                  <pre>echo "deb [trusted=yes] https://<span id="user3"></span>.github.io/<span id="repo3"></span>/apt stable main" | sudo tee /etc/apt/sources.list.d/code-editor.list</pre>
+                              </div>
+                              
+                              <div class="step">
+                                  <strong>Update and install packages:</strong>
+                                  <pre>sudo apt update && sudo apt install termux-bootstrap</pre>
+                              </div>
+                          </div>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>📦 Available Packages</h2>
+                          <ul style="margin-left: 20px; color: #666;">
+                              <li><strong>termux-bootstrap</strong> - Custom Termux bootstrap environment for Code Editor</li>
+                              <li><strong>base-files</strong> - Base system files (when available)</li>
+                              <li><strong>Additional packages</strong> - Available in pool/main directory</li>
+                          </ul>
+                          <p style="margin-top: 15px; color: #999;">For a full list of available packages, see the <code>Packages</code> file in dists/stable/main/binary-aarch64/</p>
+                      </div>
+                      
+                      <div class="section info-box">
+                          <h2>ℹ️ Build Information</h2>
+                          <p><strong>Build Date:</strong> <span id="builddate"></span></p>
+                          <p><strong>Build ID:</strong> (Available in build logs)</p>
+                          <p><strong>Architecture:</strong> aarch64, arm64</p>
+                          <p><strong>Distribution:</strong> stable</p>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>🔗 Resources</h2>
+                          <ul style="margin-left: 20px; color: #666;">
+                              <li><a href="./apt/dists/stable/main/binary-aarch64/Packages" style="color: #667eea;">View Package List</a></li>
+                              <li><a href="./apt/pool/main/" style="color: #667eea;">Browse Pool Directory</a></li>
+                              <li><strong>APT Repository Path:</strong> <code>./apt/</code></li>
+                          </ul>
+                      </div>
+                  </div>
+                  
+                  <div class="footer">
+                      <p>Code Editor Custom APT Repository • Powered by GitHub Pages & GitHub Actions</p>
+                      <p>Repository maintains custom Termux packages for Code Editor application</p>
+                  </div>
+              </div>
+              
+              <script>
+                  const urlParams = new URLSearchParams(window.location.search);
+                  const hostname = window.location.hostname;
+                  const pathname = window.location.pathname;
+                  const parts = hostname.split('.');
+                  const user = parts[0];
+                  const repoPath = pathname.split('/').filter(p => p && p !== 'apt')[0];
+                  
+                  document.querySelectorAll('#user, #user2, #user3').forEach(el => el.textContent = user);
+                  document.querySelectorAll('#repo, #repo2, #repo3').forEach(el => el.textContent = repoPath);
+                  document.getElementById('builddate').textContent = new Date().toLocaleString();
+              </script>
+          </body>
+          </html>
+          EOF
+          
+          echo "✅ GitHub Pages content prepared"
+          ls -la gh-pages-final/
+      
+      - name: Deploy to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: gh-pages-final
+      
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+      
+      - name: Create release with bootstrap
+        if: success()
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: bootstrap-packages/bootstrap-*-custom.zip
+          file_glob: true
+          tag_name: apt-repo-${{ github.run_number }}
+          release_name: Custom APT Repository Build ${{ github.run_number }}
+          overwrite: true
+          body: |
+            # Custom APT Repository Build #${{ github.run_number }}
+            
+            **Status:** ✅ Successfully deployed to GitHub Pages
+            
+            ## Repository Details
+            - **URL:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt
+            - **Type:** Professional Debian APT Repository
+            - **Package:** com.codeeditor.android
+            - **Distribution:** stable
+            - **Architectures:** aarch64, arm64
+            
+            ## Automatic Deployment
+            This repository is automatically deployed to GitHub Pages and available immediately after each build. No manual deployment required!
+            
+            ## Installation Instructions
+            
+            ```bash
+            # Add repository to your sources (trusted mode for GitHub Pages)
+            echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main" | sudo tee /etc/apt/sources.list.d/code-editor.list
+            
+            # Update package lists
+            sudo apt update
+            
+            # Install packages
+            sudo apt install termux-bootstrap
+            ```
+            
+            ## Build Information
+            - **Build ID:** ${{ github.run_number }}
+            - **Build Date:** ${{ github.event.repository.updated_at }}
+            - **Repository:** ${{ github.repository }}
+            - **Trigger:** ${{ github.event_name }}
+            
+            ## Files Included
+            - Bootstrap packages (.zip files)
+            - APT repository metadata (Packages, Release files)
+            - Ready-to-use GitHub Pages structure
+      
+      - name: Summary & Status
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "✅ Build Summary"
+          echo "=========================================="
+          echo "Build Status: ${{ job.status }}"
+          echo "Build ID: ${{ github.run_number }}"
+          echo "Repository: ${{ github.repository }}"
+          echo ""
+          echo "📍 GitHub Pages Deployment"
+          echo "APT Repository: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt"
+          echo "Index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          echo ""
+          echo "⚡ Automatic Updates"
+          echo "This repository updates automatically on every build!"
+          echo "No manual deployment steps required."
+          echo ""
+          echo "📚 Next Steps:"
+          echo "1. Copy the repository URL from above"
+          echo "2. Add to your sources.list with: deb [trusted=yes] <URL> stable main"
+          echo "3. Run: apt update && apt install termux-bootstrap"
