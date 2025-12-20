@@ -31,6 +31,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
       
       - name: Prepare for GitHub Pages deployment
         run: |
@@ -374,28 +377,35 @@ jobs:
           ls -la gh-pages-final/
       
       - name: Deploy to GitHub Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Initialize git in gh-pages-final directory
+          # Navigate to content directory
           cd gh-pages-final
           
+          # Configure git with proper authentication
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Initialize repository
           git init
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git remote add origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          
+          # Fetch existing gh-pages branch if it exists
+          git fetch origin ${{ env.GH_PAGES_BRANCH }} --depth=1 2>/dev/null || echo "gh-pages branch does not exist yet"
           
           # Add all files
           git add -A
           
-          # Create initial commit
-          git commit -m "Update custom APT repository - Build ${{ github.run_number }}" 2>&1 || true
+          # Create commit (allow empty for first run)
+          git commit -m "Update custom APT repository - Build ${{ github.run_number }}" --allow-empty
           
-          # Set up remote and push to gh-pages branch
-          git remote add origin https://github.com/${{ github.repository }}.git
+          # Push to gh-pages branch
           git branch -M ${{ env.GH_PAGES_BRANCH }}
+          git push -u origin ${{ env.GH_PAGES_BRANCH }} --force
           
-          # Push with authentication
-          git push -u origin ${{ env.GH_PAGES_BRANCH }} --force 2>&1 | grep -E "(master|main|gh-pages|rejected|error)" || echo "Push attempt completed"
-          
-          echo "Deployed to GitHub Pages"
+          echo "✅ Deployed to GitHub Pages"
+          echo "APT Repository: https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/apt"
       
       - name: Create release with bootstrap
         if: success()
