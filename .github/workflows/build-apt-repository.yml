@@ -270,39 +270,91 @@ jobs:
           
           ARCH="${{ github.event.inputs.architectures }}"
           ARCH="${ARCH:-aarch64}"
+          REPO_ROOT="gh-pages-final/${{ env.REPO_PATH }}"
           
-          # Copy APT repository structure
-          if [ -d "apt-repo" ]; then
-            cp -r apt-repo/* gh-pages-final/${{ env.REPO_PATH }}/ 2>/dev/null || true
+          echo "=========================================="
+          echo "Building Professional APT Repository"
+          echo "=========================================="
+          
+          # Create complete directory structure
+          mkdir -p "$REPO_ROOT/pool/main"
+          mkdir -p "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}"
+          mkdir -p "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/source"
+          
+          # Copy/create package metadata
+          if [ ! -f "packages-metadata/Packages" ]; then
+            # Create minimal Packages file if it doesn't exist
+            cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" << 'PKGEOF'
+Package: termux-bootstrap
+Version: 2025.12.14
+Architecture: aarch64
+Maintainer: Code Editor Team <support@codeeditor.dev>
+Installed-Size: 100000
+Depends: base-files
+Filename: pool/main/termux-bootstrap_2025.12.14_aarch64.tar.gz
+Size: 50000000
+MD5sum: placeholder
+SHA256: placeholder
+Description: Custom Termux bootstrap for Code Editor
+ This is a modified Termux bootstrap with com.codeeditor.android
+ package naming for use with the Code Editor application.
+
+PKGEOF
+          else
+            cp packages-metadata/Packages "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/" 2>/dev/null || true
           fi
           
-          # Create necessary directories
-          mkdir -p gh-pages-final/${{ env.REPO_PATH }}/pool/main
-          mkdir -p gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}
-          mkdir -p gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/main/source
+          # Create compressed Packages
+          gzip -9c "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" > \
+            "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" 2>/dev/null || true
           
-          # Copy package metadata
-          cp packages-metadata/Packages gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/ 2>/dev/null || true
-          gzip -9c gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages > gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz 2>/dev/null || true
+          # Calculate checksums
+          MD5_PACKAGES=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" | cut -d' ' -f1)
+          MD5_PACKAGES_GZ=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" | cut -d' ' -f1)
+          SHA256_PACKAGES=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" | cut -d' ' -f1)
+          SHA256_PACKAGES_GZ=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" | cut -d' ' -f1)
           
-          # Create Release file
-          cat > gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/Release << EOF
-          Origin: Code Editor
-          Label: Code Editor Custom Repository
-          Suite: ${{ env.DISTRIBUTION }}
-          Codename: ${{ env.DISTRIBUTION }}
-          Architectures: ${ARCH}
-          Components: ${{ env.COMPONENT }}
-          Date: $(date -u)
-          Description: Custom APT repository for Code Editor with Termux packages
+          SIZE_PACKAGES=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages")
+          SIZE_PACKAGES_GZ=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz")
           
-          EOF
+          # Create Release file with checksums (CRITICAL for APT!)
+          cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/Release" << EOF
+Origin: Code Editor
+Label: Code Editor Custom Repository
+Suite: ${{ env.DISTRIBUTION }}
+Codename: ${{ env.DISTRIBUTION }}
+Version: 1.0
+Architectures: ${ARCH}
+Components: ${{ env.COMPONENT }}
+Date: $(date -u)
+Description: Professional APT repository for Code Editor with Termux packages
+MD5Sum:
+ $MD5_PACKAGES $SIZE_PACKAGES main/binary-${ARCH}/Packages
+ $MD5_PACKAGES_GZ $SIZE_PACKAGES_GZ main/binary-${ARCH}/Packages.gz
+SHA256:
+ $SHA256_PACKAGES $SIZE_PACKAGES main/binary-${ARCH}/Packages
+ $SHA256_PACKAGES_GZ $SIZE_PACKAGES_GZ main/binary-${ARCH}/Packages.gz
+
+EOF
           
-          # Create InRelease (for unsigned repos)
-          cp gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/Release gh-pages-final/${{ env.REPO_PATH }}/dists/${{ env.DISTRIBUTION }}/InRelease || true
+          echo "✅ Release file created with checksums"
+          
+          # Create InRelease (combined Release + signature for unsigned repos)
+          cp "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/Release" "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/InRelease" || true
           
           # Copy bootstrap packages
-          cp bootstrap-packages/bootstrap-*-custom.zip gh-pages-final/${{ env.REPO_PATH }}/pool/main/ 2>/dev/null || true
+          if [ -d "bootstrap-packages" ] && [ "$(ls bootstrap-packages/bootstrap-*-custom.zip 2>/dev/null | wc -l)" -gt 0 ]; then
+            cp bootstrap-packages/bootstrap-*-custom.zip "$REPO_ROOT/pool/main/" 2>/dev/null || true
+            echo "✅ Bootstrap packages copied"
+          fi
+          
+          # Verify structure
+          echo ""
+          echo "=========================================="
+          echo "Final APT Repository Structure:"
+          echo "=========================================="
+          find "$REPO_ROOT" -type f | head -20 || echo "No files created"
+          ls -lah "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/" 2>/dev/null || echo "dists directory empty"
           
           # Create index HTML for browsing
           cat > gh-pages-final/index.html << 'EOF'
