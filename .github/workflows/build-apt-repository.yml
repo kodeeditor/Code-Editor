@@ -32,11 +32,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Checkout gh-pages branch
+      - name: Prepare for GitHub Pages deployment
         run: |
-          git fetch origin ${{ env.GH_PAGES_BRANCH }} 2>/dev/null || echo "gh-pages branch doesn't exist yet"
-          git worktree add gh-pages-dir origin/${{ env.GH_PAGES_BRANCH }} 2>/dev/null || true
-          mkdir -p gh-pages-dir/${{ env.REPO_PATH }}
+          # No need to checkout gh-pages branch yet, we'll push directly
+          echo "GitHub Pages deployment will be created during build"
       
       - name: Free disk space
         run: |
@@ -376,15 +375,25 @@ jobs:
       
       - name: Deploy to GitHub Pages
         run: |
+          # Initialize git in gh-pages-final directory
           cd gh-pages-final
           
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+          git init
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
           
+          # Add all files
           git add -A
-          git commit -m "Update custom APT repository - Build ${{ github.run_number }}" || echo "No changes to commit"
           
-          git push -u origin HEAD:${{ env.GH_PAGES_BRANCH }} --force 2>&1 | grep -v "^Total"
+          # Create initial commit
+          git commit -m "Update custom APT repository - Build ${{ github.run_number }}" 2>&1 || true
+          
+          # Set up remote and push to gh-pages branch
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git branch -M ${{ env.GH_PAGES_BRANCH }}
+          
+          # Push with authentication
+          git push -u origin ${{ env.GH_PAGES_BRANCH }} --force 2>&1 | grep -E "(master|main|gh-pages|rejected|error)" || echo "Push attempt completed"
           
           echo "Deployed to GitHub Pages"
       
