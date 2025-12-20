@@ -284,7 +284,7 @@ jobs:
           # Copy/create package metadata
           if [ ! -f "packages-metadata/Packages" ]; then
             # Create minimal Packages file if it doesn't exist
-            cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" << 'PKGEOF'
+            cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" << 'PKGEOF'
 Package: termux-bootstrap
 Version: 2025.12.14
 Architecture: aarch64
@@ -298,24 +298,23 @@ SHA256: placeholder
 Description: Custom Termux bootstrap for Code Editor
  This is a modified Termux bootstrap with com.codeeditor.android
  package naming for use with the Code Editor application.
-
 PKGEOF
           else
-            cp packages-metadata/Packages "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/" 2>/dev/null || true
+            cp packages-metadata/Packages "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/" 2>/dev/null || true
           fi
           
           # Create compressed Packages
-          gzip -9c "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" > \
-            "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" 2>/dev/null || true
+          gzip -9c "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" > \
+            "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" 2>/dev/null || true
           
           # Calculate checksums
-          MD5_PACKAGES=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" | cut -d' ' -f1)
-          MD5_PACKAGES_GZ=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" | cut -d' ' -f1)
-          SHA256_PACKAGES=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" | cut -d' ' -f1)
-          SHA256_PACKAGES_GZ=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" | cut -d' ' -f1)
+          MD5_PACKAGES=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" | cut -d' ' -f1)
+          MD5_PACKAGES_GZ=$(md5sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" | cut -d' ' -f1)
+          SHA256_PACKAGES=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" | cut -d' ' -f1)
+          SHA256_PACKAGES_GZ=$(sha256sum "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" | cut -d' ' -f1)
           
-          SIZE_PACKAGES=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages")
-          SIZE_PACKAGES_GZ=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}}/Packages.gz")
+          SIZE_PACKAGES=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages")
+          SIZE_PACKAGES_GZ=$(stat -f%z "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz" 2>/dev/null || stat -c%s "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/main/binary-${ARCH}/Packages.gz")
           
           # Create Release file with checksums (CRITICAL for APT!)
           cat > "$REPO_ROOT/dists/${{ env.DISTRIBUTION }}/Release" << EOF
