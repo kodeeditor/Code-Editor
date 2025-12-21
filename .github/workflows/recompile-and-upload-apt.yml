@@ -15,30 +15,12 @@ env:
   CUSTOM_DATA_PATH: /data/data/com.codeeditor.android/files
 
 jobs:
-  setup-build:
-    runs-on: ubuntu-latest
-    outputs:
-      build_matrix: ${{ steps.set_matrix.outputs.matrix }}
-    steps:
-      - name: Set build matrix
-        id: set_matrix
-        run: |
-          ARCHS="${{ github.event.inputs.architectures }}"
-          if [ -z "$ARCHS" ]; then
-            ARCHS="aarch64"
-          fi
-          
-          # Convert to JSON array
-          MATRIX=$(echo "$ARCHS" | tr ',' '\n' | jq -R . | jq -s .)
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
   recompile-packages:
-    needs: setup-build
     runs-on: ubuntu-latest
     timeout-minutes: 1440
     strategy:
       matrix:
-        arch: ${{ fromJson(needs.setup-build.outputs.build_matrix) }}
+        arch: [aarch64, arm, i686, x86_64]
       fail-fast: false
     
     steps:
