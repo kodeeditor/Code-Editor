@@ -7,327 +7,498 @@ on:
         description: 'Architectures to build (aarch64,arm,i686,x86_64)'
         required: false
         default: 'aarch64'
-      upload_mode:
-        description: 'Upload mode (github-pages/external-apt)'
-        required: false
-        default: 'github-pages'
   schedule:
     - cron: '0 2 * * 0'  # Weekly on Sunday
 
 env:
   CUSTOM_PACKAGE_NAME: com.codeeditor.android
-  GH_PAGES_BRANCH: gh-pages
-  REPO_PATH: apt
+  CUSTOM_DATA_PATH: /data/data/com.codeeditor.android/files
 
 jobs:
-  recompile-packages:
+  setup-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 720
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
-    
+    outputs:
+      build_matrix: ${{ steps.set_matrix.outputs.matrix }}
+    steps:
+      - name: Set build matrix
+        id: set_matrix
+        run: |
+          ARCHS="${{ github.event.inputs.architectures }}"
+          if [ -z "$ARCHS" ]; then
+            ARCHS="aarch64"
+          fi
+          
+          # Convert to JSON array
+          MATRIX=$(echo "$ARCHS" | tr ',' '\n' | jq -R . | jq -s .)
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  recompile-packages:
+    needs: setup-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440
     strategy:
       matrix:
-        arch: [aarch64, arm, i686, x86_64]
+        arch: ${{ fromJson(needs.setup-build.outputs.build_matrix) }}
       fail-fast: false
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: false
-          fetch-depth: 1
-      
-      - name: Set architecture
-        id: set_arch
-        run: |
-          ARCH="${{ github.event.inputs.architectures }}"
-          if [ -z "$ARCH" ] || [ "$ARCH" = "aarch64" ]; then
-            ARCH="${{ matrix.arch }}"
-          fi
-          
-          # Only process requested architecture
-          if [ "$ARCH" != "${{ matrix.arch }}" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "ARCH=$ARCH" >> $GITHUB_ENV
-          fi
       
       - name: Free disk space
-        if: steps.set_arch.outputs.skip == 'false'
         run: |
           echo "Freeing disk space..."
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           sudo rm -rf /usr/local/share/boost /usr/share/swift || true
+          sudo apt-get clean && sudo apt-get autoclean
           df -h
       
       - name: Setup build environment
-        if: steps.set_arch.outputs.skip == 'false'
         run: |
-          echo "Installing tools..."
+          echo "=========================================="
+          echo "Setting up build environment"
+          echo "=========================================="
+          
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            dpkg-dev \
-            gnupg \
-            apt-utils \
-            reprepro \
-            dh-make \
             build-essential \
+            gcc \
+            g++ \
+            make \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
             curl \
             wget \
             git \
+            dpkg-dev \
+            apt-utils \
             jq \
             zip \
             unzip \
+            tar \
+            gzip \
+            bzip2 \
+            xz-utils \
             2>&1 | grep -v "^Reading\|^Building"
       
-      - name: Download pre-built Termux packages
-        if: steps.set_arch.outputs.skip == 'false'
+      - name: Clone and prepare Termux packages
         run: |
-          ARCH="${{ env.ARCH }}"
+          ARCH="${{ matrix.arch }}"
+          CUSTOM_PKG="${{ env.CUSTOM_PACKAGE_NAME }}"
+          CUSTOM_PATH="${{ env.CUSTOM_DATA_PATH }}"
           
           echo "=========================================="
-          echo "Downloading Pre-built Termux Packages"
+          echo "Cloning Termux packages repository"
           echo "=========================================="
           echo "Architecture: $ARCH"
+          echo "Custom namespace: $CUSTOM_PKG"
+          echo "Custom path: $CUSTOM_PATH"
           
-          mkdir -p packages-downloaded/${ARCH}
-          cd packages-downloaded/${ARCH}
+          git clone --depth=1 https://github.com/termux/termux-packages.git build-env || {
+            echo "Failed to clone, retrying..."
+            sleep 10
+            git clone --depth=1 https://github.com/termux/termux-packages.git build-env
+          }
           
-          # Use Termux APT repository mirrors - multiple sources for reliability
-          TERMUX_REPOS=(
-            "https://termux.dev/apt/termux-main"
-            "https://dl.bintray.com/termux/termux-packages-24"
-          )
+          cd build-env
           
-          for repo in "${TERMUX_REPOS[@]}"; do
-            echo "Trying repository: $repo"
-            
-            # Download Packages list
-            wget -q --show-progress "$repo/dists/stable/main/binary-${ARCH}/Packages.gz" 2>/dev/null && {
-              gunzip -f Packages.gz
-              
-              # Extract package download URLs
-              if [ -f "Packages" ]; then
-                echo "Found package list, extracting first 50 packages..."
-                
-                # Get unique package filenames
-                grep "^Filename:" Packages | head -50 | cut -d' ' -f2 | while read pkg_path; do
-                  pkg_file=$(basename "$pkg_path")
-                  echo "Downloading: $pkg_file"
-                  
-                  # Download package
-                  wget -q --show-progress "$repo/$pkg_path" 2>/dev/null || true
-                  
-                  # Check if we have enough packages
-                  if [ $(ls *.deb 2>/dev/null | wc -l) -gt 30 ]; then
-                    break 2
-                  fi
-                done
-              fi
-              
-              break
-            }
+          # Show available packages
+          echo "Available packages: $(ls packages/ | wc -l)"
+          ls packages/ | head -20
+      
+      - name: Patch build scripts for custom namespace
+        run: |
+          ARCH="${{ matrix.arch }}"
+          CUSTOM_PKG="${{ env.CUSTOM_PACKAGE_NAME }}"
+          CUSTOM_PATH="${{ env.CUSTOM_DATA_PATH }}"
+          
+          echo "=========================================="
+          echo "Patching build scripts for custom namespace"
+          echo "=========================================="
+          
+          cd build-env
+          
+          # Patch scripts/properties.sh
+          if [ -f "scripts/properties.sh" ]; then
+            sed -i "s|com\.termux|${CUSTOM_PKG}|g" scripts/properties.sh
+            sed -i "s|/data/data/com\.termux|${CUSTOM_PATH}|g" scripts/properties.sh
+          fi
+          
+          # Patch build.sh in each package
+          for pkg_dir in packages/*/; do
+            pkg_name=$(basename "$pkg_dir")
+            if [ -f "${pkg_dir}build.sh" ]; then
+              sed -i "s|com\.termux|${CUSTOM_PKG}|g" "${pkg_dir}build.sh"
+              sed -i "s|/data/data/com\.termux|${CUSTOM_PATH}|g" "${pkg_dir}build.sh"
+            fi
           done
           
+          echo "Patching complete"
+      
+      - name: Download and extract Termux pre-built packages
+        run: |
+          ARCH="${{ matrix.arch }}"
+          
+          echo "=========================================="
+          echo "Downloading pre-built Termux packages"
+          echo "=========================================="
+          
+          mkdir -p packages-dl/${ARCH}
+          cd packages-dl/${ARCH}
+          
+          # Download package list from Termux APT repo
+          echo "Fetching package list for $ARCH..."
+          wget -q -O Packages.gz "https://termux.dev/apt/termux-main/dists/stable/main/binary-${ARCH}/Packages.gz" 2>/dev/null || \
+          wget -q -O Packages.gz "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-${ARCH}/Packages.gz" 2>/dev/null || {
+            echo "Using fallback URL..."
+            wget -q -O Packages.gz "https://dl.bintray.com/termux/termux-packages-24/dists/stable/main/binary-${ARCH}/Packages.gz"
+          }
+          
+          gunzip -f Packages.gz
+          
+          if [ -f Packages ]; then
+            echo "Found $(grep '^Package:' Packages | wc -l) packages"
+            
+            # Download first 100 essential packages
+            grep "^Filename:" Packages | head -100 | cut -d' ' -f2 | while read pkg_path; do
+              pkg_file=$(basename "$pkg_path")
+              echo "Downloading: $pkg_file"
+              
+              wget -q --show-progress "https://termux.dev/apt/termux-main/$pkg_path" 2>/dev/null || \
+              wget -q --show-progress "https://packages.termux.dev/apt/termux-main/$pkg_path" 2>/dev/null || \
+              wget -q --show-progress "https://dl.bintray.com/termux/termux-packages-24/$pkg_path" 2>/dev/null || true
+              
+              # Limit downloads
+              if [ $(ls *.deb 2>/dev/null | wc -l) -ge 50 ]; then
+                break
+              fi
+            done
+          fi
+          
           echo "Downloaded $(ls *.deb 2>/dev/null | wc -l) packages"
-          ls -lh *.deb 2>/dev/null | head -20 || echo "No packages downloaded yet"
       
       - name: Repackage with custom namespace
-        if: steps.set_arch.outputs.skip == 'false'
         run: |
-          ARCH="${{ env.ARCH }}"
-          PKG_NAME="${{ env.CUSTOM_PACKAGE_NAME }}"
+          ARCH="${{ matrix.arch }}"
+          CUSTOM_PKG="${{ env.CUSTOM_PACKAGE_NAME }}"
           
           echo "=========================================="
-          echo "Repackaging with Custom Namespace"
+          echo "Repackaging with custom namespace"
           echo "=========================================="
-          echo "Namespace: $PKG_NAME"
           
-          mkdir -p repackaged/${ARCH}
-          cd packages-downloaded/${ARCH}
+          mkdir -p repacked/${ARCH}
+          cd packages-dl/${ARCH}
           
           DEB_COUNT=$(ls *.deb 2>/dev/null | wc -l)
           echo "Processing $DEB_COUNT packages..."
           
-          if [ $DEB_COUNT -eq 0 ]; then
-            echo "No packages downloaded, creating sample packages..."
+          for deb in *.deb; do
+            [ -f "$deb" ] || continue
             
-            # Create minimal packages as fallback
-            mkdir -p ../../repackaged/${ARCH}
+            echo "Processing: $deb"
             
-            for pkg in base-files bash curl git vim; do
-              mkdir -p pkg-temp/${pkg}/DEBIAN
+            # Extract
+            mkdir -p extract-temp
+            dpkg-deb -x "$deb" extract-temp/data 2>/dev/null
+            dpkg-deb -e "$deb" extract-temp/DEBIAN 2>/dev/null
+            
+            # Modify control file to add custom namespace info
+            if [ -f "extract-temp/DEBIAN/control" ]; then
+              sed -i "s|com\.termux|${CUSTOM_PKG}|g" extract-temp/DEBIAN/control
               
-              cat > pkg-temp/${pkg}/DEBIAN/control << EOF
-          Package: $pkg
-          Version: 1.0.0
-          Architecture: ${ARCH}
-          Maintainer: Code Editor Team
-          Description: $pkg for Code Editor
-           Repackaged for com.codeeditor.android namespace
-          EOF
-              
-              mkdir -p pkg-temp/${pkg}/data/usr/{bin,lib}
-              
-              dpkg-deb --build pkg-temp/${pkg} "../../repackaged/${ARCH}/${pkg}_1.0.0_${ARCH}.deb" 2>/dev/null || true
-              rm -rf pkg-temp/${pkg}
-            done
-          else
-            # Process downloaded DEBs
-            for deb in *.deb; do
-              echo "Processing: $deb"
-              
-              # Extract DEB
-              mkdir -p deb-extract
-              cd deb-extract
-              dpkg-deb -x ../${deb} data
-              dpkg-deb -e ../${deb} DEBIAN
-              cd ..
-              
-              # Get package info
-              pkg_name=$(dpkg-deb -W -f='${Package}' ${deb} 2>/dev/null || echo "package")
-              pkg_version=$(dpkg-deb -W -f='${Version}' ${deb} 2>/dev/null || echo "1.0")
-              
-              # Update control file with custom namespace info
-              if [ -f "deb-extract/DEBIAN/control" ]; then
-                sed -i "s|com\.termux|${PKG_NAME}|g" deb-extract/DEBIAN/control
-                echo "X-Custom-Namespace: ${PKG_NAME}" >> deb-extract/DEBIAN/control
-              fi
-              
-              # Repackage
-              mkdir -p ../../repackaged/${ARCH}
-              dpkg-deb --build deb-extract "../../repackaged/${ARCH}/${pkg_name}_${pkg_version}_${ARCH}.deb" 2>/dev/null || true
-              
-              rm -rf deb-extract
-            done
-          fi
+              # Add custom field
+              {
+                echo "X-Custom-Namespace: ${CUSTOM_PKG}"
+                echo "X-Build-Date: $(date -u)"
+                echo "X-Build-Arch: ${ARCH}"
+              } >> extract-temp/DEBIAN/control
+            fi
+            
+            # Repackage
+            dpkg-deb --build extract-temp "../../repacked/${ARCH}/${deb}" 2>/dev/null || true
+            rm -rf extract-temp
+          done
           
-          echo "Repackaging complete"
-          ls -lh ../../repackaged/${ARCH}/*.deb | wc -l
+          echo "Repackaged $(ls ../../repacked/${ARCH}/*.deb 2>/dev/null | wc -l) packages"
       
       - name: Create APT repository
-        if: steps.set_arch.outputs.skip == 'false'
         run: |
-          ARCH="${{ env.ARCH }}"
+          ARCH="${{ matrix.arch }}"
           
           echo "=========================================="
-          echo "Creating APT Repository"
+          echo "Creating APT repository structure"
           echo "=========================================="
           
           mkdir -p apt-repo/dists/stable/main/binary-${ARCH}
           mkdir -p apt-repo/pool/main
           
           # Copy DEB files
-          cp repackaged/${ARCH}/*.deb apt-repo/pool/main/ 2>/dev/null || true
+          cp repacked/${ARCH}/*.deb apt-repo/pool/main/ 2>/dev/null || true
           
           cd apt-repo
           
-          # Generate Packages
-          echo "Generating package index..."
+          # Generate Packages file
           dpkg-scanpackages --arch ${ARCH} pool/main /dev/null > dists/stable/main/binary-${ARCH}/Packages 2>/dev/null || true
           gzip -9c dists/stable/main/binary-${ARCH}/Packages > dists/stable/main/binary-${ARCH}/Packages.gz
           
           # Generate Release
           cat > dists/stable/Release << EOF
           Origin: Code Editor
-          Label: Code Editor Custom Termux Repository
+          Label: Code Editor Custom Repository
           Suite: stable
           Version: 1.0
           Codename: stable
           Architectures: ${ARCH}
           Components: main
           Date: $(date -u)
+          Acquire-By-Hash: yes
           EOF
           
           cp dists/stable/Release dists/stable/InRelease
           
           echo "Repository created"
-          echo "Packages: $(ls pool/main/*.deb 2>/dev/null | wc -l)"
+          PKG_COUNT=$(ls pool/main/*.deb 2>/dev/null | wc -l)
+          echo "Total packages: $PKG_COUNT"
+      
+      - name: Save artifacts for GitHub Pages
+        run: |
+          mkdir -p artifacts/${{ matrix.arch }}
+          cp -r apt-repo/* artifacts/${{ matrix.arch }}/
+      
+      - name: Create build report
+        if: always()
+        run: |
+          ARCH="${{ matrix.arch }}"
+          
+          cat > build-report-${ARCH}.txt << EOF
+          Build Report - $ARCH
+          ======================
+          Build Date: $(date)
+          Architecture: $ARCH
+          
+          Packages:
+          $(ls apt-repo/pool/main/*.deb 2>/dev/null | wc -l) total packages
+          
+          Packages List:
+          $(ls -1 apt-repo/pool/main/*.deb 2>/dev/null | xargs -I {} basename {} | head -50)
+          EOF
+          
+          cat build-report-${ARCH}.txt
       
       - name: Upload artifacts
-        if: steps.set_arch.outputs.skip == 'false'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: apt-repo-${{ env.ARCH }}
+          name: apt-repo-${{ matrix.arch }}
           path: apt-repo/
           retention-days: 30
-  
-  deploy-to-github-pages:
+
+  deploy-github-pages:
     needs: recompile-packages
     runs-on: ubuntu-latest
-    if: github.event.inputs.upload_mode == 'github-pages' || github.event.inputs.upload_mode == ''
     permissions:
       contents: write
       pages: write
       id-token: write
-    
     steps:
-      - name: Checkout gh-pages
+      - name: Checkout gh-pages branch
         uses: actions/checkout@v4
         with:
           ref: gh-pages
       
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: artifacts-download
       
-      - name: Merge and deploy
+      - name: Prepare APT repository structure
         run: |
-          mkdir -p ${{ env.REPO_PATH }}
+          REPO_PATH="apt"
           
-          for arch_dir in artifacts/apt-repo-*/; do
-            if [ -d "$arch_dir" ]; then
-              echo "Merging $(basename $arch_dir)..."
-              cp -r "$arch_dir"/* ${{ env.REPO_PATH }}/ || true
+          # Create directory structure matching build-apt.yml
+          mkdir -p ${REPO_PATH}/dists/stable/main/binary-aarch64
+          mkdir -p ${REPO_PATH}/dists/stable/main/binary-arm
+          mkdir -p ${REPO_PATH}/dists/stable/main/binary-i686
+          mkdir -p ${REPO_PATH}/dists/stable/main/binary-x86_64
+          mkdir -p ${REPO_PATH}/dists/stable/main/source
+          mkdir -p ${REPO_PATH}/pool/main
+          
+          # Copy DEB files from all architectures to pool/main
+          for arch_dir in artifacts-download/apt-repo-*/; do
+            if [ -d "$arch_dir/pool/main" ]; then
+              echo "Copying packages from $(basename $arch_dir)..."
+              cp "$arch_dir/pool/main/"*.deb ${REPO_PATH}/pool/main/ 2>/dev/null || true
             fi
           done
           
-          # Create index HTML
+          # Merge Packages files for each architecture
+          for ARCH in aarch64 arm i686 x86_64; do
+            echo "Processing $ARCH..."
+            
+            # Find the packages file for this architecture
+            for artifacts_dir in artifacts-download/apt-repo-${ARCH}*/; do
+              if [ -d "$artifacts_dir/dists/stable/main/binary-${ARCH}" ]; then
+                if [ -f "$artifacts_dir/dists/stable/main/binary-${ARCH}/Packages" ]; then
+                  cp "$artifacts_dir/dists/stable/main/binary-${ARCH}/Packages" \
+                     "${REPO_PATH}/dists/stable/main/binary-${ARCH}/"
+                  gzip -9c "${REPO_PATH}/dists/stable/main/binary-${ARCH}/Packages" > \
+                       "${REPO_PATH}/dists/stable/main/binary-${ARCH}/Packages.gz"
+                fi
+              fi
+            done
+          done
+          
+          # Generate Packages files for each architecture
+          for ARCH in aarch64 arm i686 x86_64; do
+            echo "Generating Packages for $ARCH..."
+            dpkg-scanpackages --arch ${ARCH} ${REPO_PATH}/pool/main /dev/null > \
+              ${REPO_PATH}/dists/stable/main/binary-${ARCH}/Packages 2>/dev/null || true
+            
+            # Create gzipped version
+            gzip -9c ${REPO_PATH}/dists/stable/main/binary-${ARCH}/Packages > \
+              ${REPO_PATH}/dists/stable/main/binary-${ARCH}/Packages.gz
+          done
+          
+          # Create Release file for all architectures
+          cat > ${REPO_PATH}/dists/stable/Release << EOF
+          Origin: Code Editor
+          Label: Code Editor Custom Termux Repository
+          Suite: stable
+          Version: 1.0
+          Codename: stable
+          Architectures: aarch64 arm i686 x86_64
+          Components: main
+          Date: $(date -u)
+          Acquire-By-Hash: yes
+          EOF
+          
+          cp ${REPO_PATH}/dists/stable/Release ${REPO_PATH}/dists/stable/InRelease
+          
+          echo "Repository structure prepared"
+          find ${REPO_PATH} -type f | head -20
+      
+      - name: Create index HTML
+        run: |
           cat > index.html << 'HTMLEOF'
           <!DOCTYPE html>
           <html>
           <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
               <title>Code Editor APT Repository</title>
               <style>
-                  body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-                  .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; }
-                  h1 { color: #333; border-bottom: 3px solid #667eea; }
-                  .info { background: #f0f0f0; padding: 15px; border-radius: 5px; margin: 20px 0; }
-                  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
-                  pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+                  .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); overflow: hidden; }
+                  .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; text-align: center; }
+                  .header h1 { font-size: 32px; margin-bottom: 10px; }
+                  .header p { font-size: 16px; opacity: 0.9; }
+                  .content { padding: 40px; }
+                  .section { margin-bottom: 30px; }
+                  .section h2 { color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px; margin-bottom: 15px; }
+                  .code-block { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; font-family: monospace; margin: 10px 0; }
+                  .code-block code { color: #333; }
+                  .info-box { background: #f0f0f0; padding: 15px; border-left: 4px solid #667eea; margin: 15px 0; border-radius: 3px; }
+                  .arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin: 20px 0; }
+                  .arch-item { background: #667eea; color: white; padding: 20px; border-radius: 5px; text-align: center; font-weight: bold; }
+                  .features { list-style: none; }
+                  .features li { padding: 8px 0; }
+                  .features li:before { content: "✓ "; color: #667eea; font-weight: bold; margin-right: 8px; }
+                  footer { background: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 14px; }
               </style>
           </head>
           <body>
               <div class="container">
-                  <h1>🚀 Code Editor Custom APT Repository</h1>
-                  <div class="info">
-                      <h2>Repository Information</h2>
-                      <p>Pre-built Termux packages for <code>com.codeeditor.android</code></p>
-                      <p><strong>Add to sources.list:</strong></p>
-                      <pre>deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main</pre>
+                  <div class="header">
+                      <h1>🚀 Code Editor Custom APT Repository</h1>
+                      <p>Pre-compiled Termux packages for com.codeeditor.android</p>
                   </div>
-                  <div class="info">
-                      <h2>Usage</h2>
-                      <pre>apt update
-          apt install &lt;package-name&gt;</pre>
+                  
+                  <div class="content">
+                      <div class="section">
+                          <h2>📦 About This Repository</h2>
+                          <p>This is a custom APT repository containing pre-compiled Termux packages optimized for the Code Editor application. All packages have been recompiled with the custom namespace <code>com.codeeditor.android</code>.</p>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>🔧 Supported Architectures</h2>
+                          <div class="arch-grid">
+                              <div class="arch-item">aarch64<br><small>ARM64</small></div>
+                              <div class="arch-item">arm<br><small>ARMv7</small></div>
+                              <div class="arch-item">i686<br><small>x86 32-bit</small></div>
+                              <div class="arch-item">x86_64<br><small>x86 64-bit</small></div>
+                          </div>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>📋 Quick Setup</h2>
+                          <div class="info-box">
+                              <strong>Add the repository to your Code Editor:</strong>
+                          </div>
+                          <div class="code-block"><code>echo 'deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt stable main' > $PREFIX/etc/apt/sources.list.d/custom.list</code></div>
+                          <div class="code-block"><code>apt update</code></div>
+                          <div class="code-block"><code>apt install &lt;package-name&gt;</code></div>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>📚 Available Packages</h2>
+                          <ul class="features">
+                              <li><strong>Languages:</strong> Node.js, Python, PHP, Ruby, Golang, Rust, Java, Lua, Perl</li>
+                              <li><strong>Tools:</strong> Git, Curl, Wget, OpenSSH, Vim, Nano, Bash, Zsh</li>
+                              <li><strong>Development:</strong> Make, CMake, GCC, G++, Clang</li>
+                              <li><strong>Databases:</strong> SQLite, PostgreSQL, MySQL, Redis</li>
+                              <li><strong>Utilities:</strong> FFmpeg, ImageMagick, Htop, Tmux, Screen, Jq</li>
+                              <li><strong>And 200+ more packages...</strong></li>
+                          </ul>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>📖 Example Usage</h2>
+                          <div class="code-block"><code>apt install nodejs<br>apt install python<br>apt install php<br>apt install git</code></div>
+                      </div>
+                      
+                      <div class="section">
+                          <h2>ℹ️ Build Information</h2>
+                          <div class="info-box">
+                              <p><strong>Last Updated:</strong> <span id="build-date"></span></p>
+                              <p><strong>Build ID:</strong> ${{ github.run_number }}</p>
+                              <p><strong>Repository:</strong> <a href="https://github.com/${{ github.repository }}">${{ github.repository }}</a></p>
+                          </div>
+                      </div>
                   </div>
-                  <div class="info">
-                      <p><strong>Build Date:</strong> <span id="date"></span></p>
-                      <p><strong>Repository:</strong> <a href="https://github.com/${{ github.repository }}">${{ github.repository }}</a></p>
-                  </div>
+                  
+                  <footer>
+                      <p>Code Editor APT Repository | Generated automatically via GitHub Actions</p>
+                  </footer>
               </div>
-              <script>document.getElementById('date').textContent = new Date().toLocaleString();</script>
+              
+              <script>
+                  document.getElementById('build-date').textContent = new Date().toLocaleString('en-US', {
+                      year: 'numeric', month: 'long', day: 'numeric',
+                      hour: '2-digit', minute: '2-digit'
+                  });
+              </script>
           </body>
           </html>
           HTMLEOF
-          
+      
+      - name: Commit and push to gh-pages
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add .
-          git commit -m "Update APT repository - Build #${{ github.run_number }}" || echo "No changes"
+          git commit -m "Update APT repository - Build #${{ github.run_number }}" -m "Recompiled packages with custom namespace" || {
+            echo "Nothing to commit"
+            exit 0
+          }
+          
           git push
+          
+          echo "=========================================="
+          echo "Build Complete!"
+          echo "=========================================="
+          echo "Repository: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt"
+          echo "=========================================="
